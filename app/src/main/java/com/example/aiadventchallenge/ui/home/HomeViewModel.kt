@@ -19,9 +19,10 @@ sealed interface UiState {
 }
 
 class HomeViewModel(
-    application: Application,
-    private val client: LlmClient = LlmClient()
+    application: Application
 ) : AndroidViewModel(application) {
+
+    private val client = LlmClient()
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
