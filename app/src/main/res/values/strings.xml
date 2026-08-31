@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">AI Advent Challenge</string>
+    <string name="api_key_label">API-ключ OpenRouter</string>
+    <string name="save">Сохранить</string>
+    <string name="prompt_label">Запрос к LLM</string>
+    <string name="send">Отправить</string>
+    <string name="idle_hint">Нажмите «Отправить», чтобы получить ответ от LLM.</string>
+</resources>
