@@ -11,6 +11,7 @@
 /.idea/deviceManager.xml
 /.idea/runConfigurations.xml
 /.idea/migrations.xml
+/.idea/markdown.xml
 .DS_Store
 build/
 captures
@@ -20,3 +21,4 @@ local.properties
 *.jks
 *.keystore
 .kotlin/
+AGENTS.md

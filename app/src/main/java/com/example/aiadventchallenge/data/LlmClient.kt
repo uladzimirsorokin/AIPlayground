@@ -18,7 +18,15 @@ class LlmClient(
     private val model: String = BuildConfig.LLM_MODEL
 ) {
 
-    suspend fun complete(prompt: String, apiKey: String): String = withContext(Dispatchers.IO) {
+    suspend fun complete(
+        prompt: String,
+        apiKey: String,
+        systemPrompt: String? = null,
+        maxTokens: Int? = null,
+        stop: List<String>? = null,
+        responseFormat: String? = null,
+        formatInstruction: String? = null
+    ): String = withContext(Dispatchers.IO) {
         val url = URL(endpoint.ifBlank { "$baseUrl/v1/chat/completions" })
         val connection = url.openConnection() as HttpURLConnection
         try {
@@ -30,11 +38,19 @@ class LlmClient(
             connection.setRequestProperty("Authorization", "Bearer $apiKey")
             connection.doOutput = true
 
+            val userContent = if (formatInstruction != null) "$prompt\n\n$formatInstruction" else prompt
+            val messages = JSONArray().apply {
+                systemPrompt?.takeIf { it.isNotBlank() }?.let {
+                    put(JSONObject().put("role", "system").put("content", it))
+                }
+                put(JSONObject().put("role", "user").put("content", userContent))
+            }
             val body = JSONObject()
                 .put("model", model)
-                .put("messages", JSONArray().put(
-                    JSONObject().put("role", "user").put("content", prompt)
-                ))
+                .put("messages", messages)
+            maxTokens?.let { body.put("max_tokens", it) }
+            stop?.let { body.put("stop", JSONArray().apply { it.forEach(::put) }) }
+            responseFormat?.let { body.put("response_format", JSONObject().put("type", it)) }
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
 
             val code = connection.responseCode

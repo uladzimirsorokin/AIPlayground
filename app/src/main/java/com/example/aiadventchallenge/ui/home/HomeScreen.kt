@@ -3,6 +3,7 @@ package com.example.aiadventchallenge.ui.home
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -10,13 +11,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -29,13 +34,22 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.ui.theme.AIAdventChallengeTheme
+import kotlin.math.roundToInt
 
 @Composable
 fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
     var apiKey by rememberSaveable { mutableStateOf("") }
     var prompt by rememberSaveable { mutableStateOf("") }
+    var maxTokens by rememberSaveable { mutableIntStateOf(200) }
+    var jsonFormat by rememberSaveable { mutableStateOf(true) }
     val uiState by viewModel.uiState.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
+    val systemPrompt by viewModel.systemPrompt.collectAsState()
+    var systemPromptInput by rememberSaveable(systemPrompt) { mutableStateOf(systemPrompt) }
+    val stopSequences by viewModel.stopSequences.collectAsState()
+    var stopInput by rememberSaveable(stopSequences) {
+        mutableStateOf(stopSequences.joinToString("|") { it.replace("\n", "\\n") })
+    }
 
     Scaffold { innerPadding ->
         Column(
@@ -70,6 +84,17 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                 }
             } else {
                 OutlinedTextField(
+                    value = systemPromptInput,
+                    onValueChange = {
+                        systemPromptInput = it
+                        viewModel.saveSystemPrompt(it)
+                    },
+                    label = { Text(stringResource(R.string.system_prompt_label)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+
+                OutlinedTextField(
                     value = prompt,
                     onValueChange = { prompt = it },
                     label = { Text(stringResource(R.string.prompt_label)) },
@@ -77,12 +102,66 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                     minLines = 2
                 )
 
-                Button(
-                    onClick = { viewModel.send(prompt) },
-                    enabled = uiState !is UiState.Loading,
-                    modifier = Modifier.align(Alignment.End)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.json_format),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                            checked = jsonFormat,
+                            onCheckedChange = { jsonFormat = it }
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = stringResource(R.string.max_tokens_label, maxTokens),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Slider(
+                        value = maxTokens.toFloat(),
+                        onValueChange = { maxTokens = it.roundToInt() },
+                        valueRange = 50f..2000f
+                    )
+                    OutlinedTextField(
+                        value = stopInput,
+                        onValueChange = {
+                            stopInput = it
+                            viewModel.saveStopSequences(it.replace("\\n", "\n"))
+                        },
+                        label = { Text(stringResource(R.string.stop_label)) },
+                        supportingText = {
+                            Text(stringResource(R.string.stop_support))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(stringResource(R.string.send))
+                    Button(
+                        onClick = { viewModel.send(prompt) },
+                        enabled = uiState !is UiState.Loading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(stringResource(R.string.send))
+                    }
+                    Button(
+                        onClick = { viewModel.compare(prompt, maxTokens, jsonFormat) },
+                        enabled = uiState !is UiState.Loading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(stringResource(R.string.compare))
+                    }
                 }
             }
 
@@ -106,6 +185,33 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                         text = state.response,
                         style = MaterialTheme.typography.bodyLarge
                     )
+                }
+
+                is UiState.CompareSuccess -> Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = stringResource(R.string.compare_plain_title),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = state.plain,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        HorizontalDivider()
+                        Text(
+                            text = stringResource(R.string.compare_constrained_title),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = state.constrained,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
 
                 is UiState.Error -> Text(

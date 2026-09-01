@@ -3,6 +3,14 @@
     <string name="api_key_label">API-ключ OpenRouter</string>
     <string name="save">Сохранить</string>
     <string name="prompt_label">Запрос к LLM</string>
+    <string name="system_prompt_label">System prompt</string>
     <string name="send">Отправить</string>
-    <string name="idle_hint">Нажмите «Отправить», чтобы получить ответ от LLM.</string>
+    <string name="compare">Сравнить</string>
+    <string name="json_format">JSON-формат ответа</string>
+    <string name="max_tokens_label">Лимит ответа (max_tokens): %1$d</string>
+    <string name="stop_label">Stop-последовательности</string>
+    <string name="stop_support">Через | (например: END|Human:). Не используйте \\n для JSON — это ломает ответ.</string>
+    <string name="compare_plain_title">Без ограничений</string>
+    <string name="compare_constrained_title">С ограничениями (max_tokens, stop, JSON)</string>
+    <string name="idle_hint">Нажмите «Отправить» или «Сравнить», чтобы получить ответ от LLM.</string>
 </resources>
