@@ -6,11 +6,32 @@
     <string name="system_prompt_label">System prompt</string>
     <string name="send">Отправить</string>
     <string name="compare">Сравнить</string>
+    <string name="compare_show">Сравнение с ограничениями</string>
+    <string name="compare_hide">Скрыть сравнение</string>
+    <string name="compare_description">Отправляет один и тот же промпт дважды: без ограничений и с ограничениями ниже. Результат показывает, как они влияют на ответ.</string>
+    <string name="json_description">Включает response_format=json_object и инструкцию про JSON в промпте одновременно (чтобы не противоречили).</string>
+    <string name="max_tokens_description">Максимальная длина ответа в токенах. Если лимит мал — ответ (или JSON) обрезается посредине.</string>
+    <string name="reasoning">Рассуждения (4 способа)</string>
+    <string name="reasoning_show">Рассуждения (4 способа)</string>
+    <string name="reasoning_hide">Скрыть рассуждения</string>
+    <string name="reasoning_run">Запустить рассуждения</string>
+    <string name="reasoning_description">Одна и та же задача из поля «Запрос к LLM» решается четырьмя способами. Затем модель сравнивает все решения и выделяет лучшее. Вот что делает каждый способ:</string>
+    <string name="r_direct_description">Задача отправляется без дополнительных инструкций — ответ как есть.</string>
+    <string name="r_step_description">К задаче добавляется инструкция «решай пошагово» — модель расписывает ход решения.</string>
+    <string name="r_prompt_description">Модель сначала сама составляет промпт для задачи, затем решает задачу этим промптом (промпт тоже показывается).</string>
+    <string name="r_experts_description">В промпт добавляется группа экспертов: аналитик, инженер и критик. Каждый даёт решение, критик сравнивает.</string>
+    <string name="r_direct_title">1. Прямой ответ</string>
+    <string name="r_step_title">2. Пошагово</string>
+    <string name="r_prompt_title">3. Составленный промпт</string>
+    <string name="r_prompt_composed_label">Сформированный промпт:</string>
+    <string name="r_prompt_answer_label">Ответ по этому промпту:</string>
+    <string name="r_experts_title">4. Группа экспертов</string>
+    <string name="r_best_title">5. Лучший результат (оценка модели)</string>
     <string name="json_format">JSON-формат ответа</string>
     <string name="max_tokens_label">Лимит ответа (max_tokens): %1$d</string>
     <string name="stop_label">Stop-последовательности</string>
     <string name="stop_support">Через | (например: END|Human:). Не используйте \\n для JSON — это ломает ответ.</string>
     <string name="compare_plain_title">Без ограничений</string>
     <string name="compare_constrained_title">С ограничениями (max_tokens, stop, JSON)</string>
-    <string name="idle_hint">Нажмите «Отправить» или «Сравнить», чтобы получить ответ от LLM.</string>
+    <string name="idle_hint">Введите задачу в поле «Запрос к LLM» и нажмите «Отправить» (обычный ответ), либо раскройте «Рассуждения» или «Сравнение».</string>
 </resources>

@@ -20,6 +20,14 @@ sealed interface UiState {
     data object Loading : UiState
     data class Success(val response: String) : UiState
     data class CompareSuccess(val plain: String, val constrained: String) : UiState
+    data class ReasoningSuccess(
+        val direct: String,
+        val stepByStep: String,
+        val composedPrompt: String,
+        val promptComposed: String,
+        val experts: String,
+        val best: String
+    ) : UiState
     data class Error(val message: String) : UiState
 }
 
@@ -60,7 +68,32 @@ class HomeViewModel(
     private companion object {
         const val FORMAT_DESCRIPTION =
             "Отвечай строго в JSON без markdown и пояснений, используй ключи: summary, facts."
+
+        const val STEP_BY_STEP =
+            "Решай пошагово: распиши ход рассуждений и каждый шаг решения."
+
+        const val PROMPT_COMPOSE =
+            "Составь оптимальный промпт для решения следующей задачи. " +
+                "Верни только текст готового промпта, без пояснений."
+
+        const val EXPERTS =
+            "Ты — группа из трёх экспертов: аналитик, инженер и критик. " +
+                "Каждый предложи своё решение задачи отдельным блоком. " +
+                "В конце критик сравни решения и укажи, какое точнее и почему."
+
+        const val JUDGE_PROMPT =
+            "Ниже — 4 решения одной и той же задачи, полученные разными способами. " +
+                "Сравни их и определи лучшее. Кратко укажи: какое решение лучшее и почему, " +
+                "и в чём его преимущество."
     }
+
+    private data class ReasoningResults(
+        val direct: String,
+        val stepByStep: String,
+        val composedPrompt: String,
+        val promptAnswer: String,
+        val experts: String
+    )
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -151,5 +184,75 @@ class HomeViewModel(
         true
     } catch (e: Exception) {
         false
+    }
+
+    fun reasoning(prompt: String) {
+        val task = prompt.trim()
+        if (task.isEmpty()) return
+
+        val apiKey = KeyStorage.load(getApplication())
+        if (apiKey == null) {
+            _uiState.value = UiState.Error("API key is not set")
+            return
+        }
+
+        val system = systemPrompt.value
+        _uiState.value = UiState.Loading
+        viewModelScope.launch {
+            try {
+                val results = coroutineScope {
+                    val directD = async { client.complete(task, apiKey, systemPrompt = system) }
+                    val stepD = async {
+                        client.complete("$task\n\n$STEP_BY_STEP", apiKey, systemPrompt = system)
+                    }
+                    val expertsD = async {
+                        client.complete("$task\n\n$EXPERTS", apiKey, systemPrompt = system)
+                    }
+                    val composedD = async {
+                        val composedPrompt = client.complete(
+                            "$PROMPT_COMPOSE\n\nЗадача:\n$task",
+                            apiKey,
+                            systemPrompt = system
+                        )
+                        composedPrompt to client.complete(composedPrompt, apiKey, systemPrompt = system)
+                    }
+
+                    val composed = composedD.await()
+                    ReasoningResults(
+                        direct = directD.await(),
+                        stepByStep = stepD.await(),
+                        composedPrompt = composed.first,
+                        promptAnswer = composed.second,
+                        experts = expertsD.await()
+                    )
+                }
+
+                val best = client.complete(
+                    "$JUDGE_PROMPT\n\n${buildResultsText(task, results)}",
+                    apiKey,
+                    systemPrompt = system
+                )
+
+                _uiState.value = UiState.ReasoningSuccess(
+                    direct = results.direct,
+                    stepByStep = results.stepByStep,
+                    composedPrompt = results.composedPrompt,
+                    promptComposed = results.promptAnswer,
+                    experts = results.experts,
+                    best = best
+                )
+            } catch (e: Exception) {
+                Log.e("LLM", "Reasoning failed", e)
+                _uiState.value = UiState.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
+
+    private fun buildResultsText(task: String, r: ReasoningResults): String = buildString {
+        append("\n\nЗадача:\n").append(task)
+        append("\n\nРешение 1 (прямой ответ):\n").append(r.direct)
+        append("\n\nРешение 2 (пошагово):\n").append(r.stepByStep)
+        append("\n\nРешение 3 (составленный промпт):\n").append(r.promptAnswer)
+        append("\n\nРешение 4 (группа экспертов):\n").append(r.experts)
     }
 }

@@ -1,7 +1,6 @@
 package com.example.aiadventchallenge.ui.home
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,9 +12,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,6 +43,8 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
     var prompt by rememberSaveable { mutableStateOf("") }
     var maxTokens by rememberSaveable { mutableIntStateOf(200) }
     var jsonFormat by rememberSaveable { mutableStateOf(true) }
+    var compareExpanded by rememberSaveable { mutableStateOf(false) }
+    var reasoningExpanded by rememberSaveable { mutableStateOf(false) }
     val uiState by viewModel.uiState.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
@@ -56,6 +59,7 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -102,65 +106,136 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                     minLines = 2
                 )
 
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = stringResource(R.string.json_format),
-                            style = MaterialTheme.typography.bodyMedium
+                Button(
+                    onClick = { viewModel.send(prompt) },
+                    enabled = uiState !is UiState.Loading,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.send))
+                }
+
+                OutlinedButton(
+                    onClick = { reasoningExpanded = !reasoningExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        stringResource(
+                            if (reasoningExpanded) R.string.reasoning_hide else R.string.reasoning_show
                         )
-                        Switch(
-                            checked = jsonFormat,
-                            onCheckedChange = { jsonFormat = it }
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = stringResource(R.string.max_tokens_label, maxTokens),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Slider(
-                        value = maxTokens.toFloat(),
-                        onValueChange = { maxTokens = it.roundToInt() },
-                        valueRange = 50f..2000f
-                    )
-                    OutlinedTextField(
-                        value = stopInput,
-                        onValueChange = {
-                            stopInput = it
-                            viewModel.saveStopSequences(it.replace("\\n", "\n"))
-                        },
-                        label = { Text(stringResource(R.string.stop_label)) },
-                        supportingText = {
-                            Text(stringResource(R.string.stop_support))
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
                     )
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = { viewModel.send(prompt) },
-                        enabled = uiState !is UiState.Loading,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(stringResource(R.string.send))
+                if (reasoningExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = stringResource(R.string.reasoning_description),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        MethodItem(
+                            title = stringResource(R.string.r_direct_title),
+                            description = stringResource(R.string.r_direct_description)
+                        )
+                        MethodItem(
+                            title = stringResource(R.string.r_step_title),
+                            description = stringResource(R.string.r_step_description)
+                        )
+                        MethodItem(
+                            title = stringResource(R.string.r_prompt_title),
+                            description = stringResource(R.string.r_prompt_description)
+                        )
+                        MethodItem(
+                            title = stringResource(R.string.r_experts_title),
+                            description = stringResource(R.string.r_experts_description)
+                        )
+                        Button(
+                            onClick = { viewModel.reasoning(prompt) },
+                            enabled = uiState !is UiState.Loading,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.reasoning_run))
+                        }
                     }
-                    Button(
-                        onClick = { viewModel.compare(prompt, maxTokens, jsonFormat) },
-                        enabled = uiState !is UiState.Loading,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(stringResource(R.string.compare))
+                }
+
+                OutlinedButton(
+                    onClick = { compareExpanded = !compareExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        stringResource(
+                            if (compareExpanded) R.string.compare_hide else R.string.compare_show
+                        )
+                    )
+                }
+
+                if (compareExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = stringResource(R.string.compare_description),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = stringResource(R.string.max_tokens_label, maxTokens),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Slider(
+                                value = maxTokens.toFloat(),
+                                onValueChange = { maxTokens = it.roundToInt() },
+                                valueRange = 50f..2000f
+                            )
+                            Text(
+                                text = stringResource(R.string.max_tokens_description),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.json_format),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Switch(
+                                    checked = jsonFormat,
+                                    onCheckedChange = { jsonFormat = it }
+                                )
+                            }
+                            Text(
+                                text = stringResource(R.string.json_description),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        OutlinedTextField(
+                            value = stopInput,
+                            onValueChange = {
+                                stopInput = it
+                                viewModel.saveStopSequences(it.replace("\\n", "\n"))
+                            },
+                            label = { Text(stringResource(R.string.stop_label)) },
+                            supportingText = {
+                                Text(stringResource(R.string.stop_support))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        Button(
+                            onClick = { viewModel.compare(prompt, maxTokens, jsonFormat) },
+                            enabled = uiState !is UiState.Loading,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.compare))
+                        }
                     }
                 }
             }
@@ -175,43 +250,66 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
 
-                is UiState.Success -> Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                ) {
+                is UiState.Success -> Text(
+                    text = state.response,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+
+                is UiState.CompareSuccess -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = state.response,
-                        style = MaterialTheme.typography.bodyLarge
+                        text = stringResource(R.string.compare_plain_title),
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = state.plain,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    HorizontalDivider()
+                    Text(
+                        text = stringResource(R.string.compare_constrained_title),
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = state.constrained,
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
 
-                is UiState.CompareSuccess -> Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                ) {
+                is UiState.ReasoningSuccess -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ReasoningSection(stringResource(R.string.r_direct_title), state.direct)
+                    ReasoningSection(stringResource(R.string.r_step_title), state.stepByStep)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = stringResource(R.string.compare_plain_title),
+                            text = stringResource(R.string.r_prompt_title),
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = state.plain,
+                            text = stringResource(R.string.r_prompt_composed_label),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                text = state.composedPrompt,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.r_prompt_answer_label),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Text(
+                            text = state.promptComposed,
                             style = MaterialTheme.typography.bodyMedium
                         )
                         HorizontalDivider()
-                        Text(
-                            text = stringResource(R.string.compare_constrained_title),
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            text = state.constrained,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
                     }
+                    ReasoningSection(stringResource(R.string.r_experts_title), state.experts)
+                    ReasoningSection(stringResource(R.string.r_best_title), state.best)
                 }
 
                 is UiState.Error -> Text(
@@ -221,6 +319,35 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ReasoningSection(title: String, body: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            text = body,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun MethodItem(title: String, description: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
 
