@@ -25,7 +25,8 @@ class LlmClient(
         maxTokens: Int? = null,
         stop: List<String>? = null,
         responseFormat: String? = null,
-        formatInstruction: String? = null
+        formatInstruction: String? = null,
+        temperature: Double? = null
     ): String = withContext(Dispatchers.IO) {
         val url = URL(endpoint.ifBlank { "$baseUrl/v1/chat/completions" })
         val connection = url.openConnection() as HttpURLConnection
@@ -51,6 +52,7 @@ class LlmClient(
             maxTokens?.let { body.put("max_tokens", it) }
             stop?.let { body.put("stop", JSONArray().apply { it.forEach(::put) }) }
             responseFormat?.let { body.put("response_format", JSONObject().put("type", it)) }
+            temperature?.let { body.put("temperature", it) }
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
 
             val code = connection.responseCode

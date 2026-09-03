@@ -20,6 +20,16 @@
     <string name="r_step_description">К задаче добавляется инструкция «решай пошагово» — модель расписывает ход решения.</string>
     <string name="r_prompt_description">Модель сначала сама составляет промпт для задачи, затем решает задачу этим промптом (промпт тоже показывается).</string>
     <string name="r_experts_description">В промпт добавляется группа экспертов: аналитик, инженер и критик. Каждый даёт решение, критик сравнивает.</string>
+    <string name="temperature_show">Температура (3 значения)</string>
+    <string name="temperature_hide">Скрыть температуру</string>
+    <string name="temperature_run">Запустить сравнение температур</string>
+    <string name="temperature_description">Один и тот же запрос выполняется трижды с разной температурой. Параметр temperature управляет случайностью: ниже — точнее и стабильнее, выше — креативнее и разнообразнее.</string>
+    <string name="t0_title">temperature = 0 (точность)</string>
+    <string name="t0_description">Детерминированный ответ: один и тот же результат при повторении. Для фактов, кода, расчётов.</string>
+    <string name="t07_title">temperature = 0.7 (баланс)</string>
+    <string name="t07_description">Стандартное значение: баланс между точностью и естественностью. Для большинства задач.</string>
+    <string name="t12_title">temperature = 1.2 (креативность)</string>
+    <string name="t12_description">Разнообразные, неожиданные ответы. Для идей, текстов, брейншторма.</string>
     <string name="r_direct_title">1. Прямой ответ</string>
     <string name="r_step_title">2. Пошагово</string>
     <string name="r_prompt_title">3. Составленный промпт</string>
@@ -34,4 +44,6 @@
     <string name="compare_plain_title">Без ограничений</string>
     <string name="compare_constrained_title">С ограничениями (max_tokens, stop, JSON)</string>
     <string name="idle_hint">Введите задачу в поле «Запрос к LLM» и нажмите «Отправить» (обычный ответ), либо раскройте «Рассуждения» или «Сравнение».</string>
+    <string name="copy">Копировать</string>
+    <string name="copied">Скопировано</string>
 </resources>

@@ -22,3 +22,4 @@ local.properties
 *.keystore
 .kotlin/
 AGENTS.md
+experiment_temperature.md

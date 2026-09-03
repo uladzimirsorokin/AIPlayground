@@ -28,6 +28,11 @@ sealed interface UiState {
         val experts: String,
         val best: String
     ) : UiState
+    data class TemperatureSuccess(
+        val temp0: String,
+        val temp07: String,
+        val temp12: String
+    ) : UiState
     data class Error(val message: String) : UiState
 }
 
@@ -254,5 +259,42 @@ class HomeViewModel(
         append("\n\nРешение 2 (пошагово):\n").append(r.stepByStep)
         append("\n\nРешение 3 (составленный промпт):\n").append(r.promptAnswer)
         append("\n\nРешение 4 (группа экспертов):\n").append(r.experts)
+    }
+
+    fun temperature(prompt: String) {
+        val task = prompt.trim()
+        if (task.isEmpty()) return
+
+        val apiKey = KeyStorage.load(getApplication())
+        if (apiKey == null) {
+            _uiState.value = UiState.Error("API key is not set")
+            return
+        }
+
+        val system = systemPrompt.value
+        _uiState.value = UiState.Loading
+        viewModelScope.launch {
+            try {
+                coroutineScope {
+                    val t0 = async {
+                        client.complete(task, apiKey, systemPrompt = system, temperature = 0.0)
+                    }
+                    val t07 = async {
+                        client.complete(task, apiKey, systemPrompt = system, temperature = 0.7)
+                    }
+                    val t12 = async {
+                        client.complete(task, apiKey, systemPrompt = system, temperature = 1.2)
+                    }
+                    _uiState.value = UiState.TemperatureSuccess(
+                        temp0 = t0.await(),
+                        temp07 = t07.await(),
+                        temp12 = t12.await()
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("LLM", "Temperature failed", e)
+                _uiState.value = UiState.Error(e.message ?: "Unknown error")
+            }
+        }
     }
 }

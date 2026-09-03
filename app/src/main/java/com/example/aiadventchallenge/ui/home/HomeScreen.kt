@@ -1,5 +1,9 @@
 package com.example.aiadventchallenge.ui.home
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
@@ -45,6 +50,7 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
     var jsonFormat by rememberSaveable { mutableStateOf(true) }
     var compareExpanded by rememberSaveable { mutableStateOf(false) }
     var reasoningExpanded by rememberSaveable { mutableStateOf(false) }
+    var temperatureExpanded by rememberSaveable { mutableStateOf(false) }
     val uiState by viewModel.uiState.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
@@ -158,6 +164,45 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                 }
 
                 OutlinedButton(
+                    onClick = { temperatureExpanded = !temperatureExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        stringResource(
+                            if (temperatureExpanded) R.string.temperature_hide else R.string.temperature_show
+                        )
+                    )
+                }
+
+                if (temperatureExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = stringResource(R.string.temperature_description),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        MethodItem(
+                            title = stringResource(R.string.t0_title),
+                            description = stringResource(R.string.t0_description)
+                        )
+                        MethodItem(
+                            title = stringResource(R.string.t07_title),
+                            description = stringResource(R.string.t07_description)
+                        )
+                        MethodItem(
+                            title = stringResource(R.string.t12_title),
+                            description = stringResource(R.string.t12_description)
+                        )
+                        Button(
+                            onClick = { viewModel.temperature(prompt) },
+                            enabled = uiState !is UiState.Loading,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.temperature_run))
+                        }
+                    }
+                }
+
+                OutlinedButton(
                     onClick = { compareExpanded = !compareExpanded },
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -250,12 +295,16 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
 
-                is UiState.Success -> Text(
-                    text = state.response,
-                    style = MaterialTheme.typography.bodyLarge
-                )
+                is UiState.Success -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CopyButton(state.response)
+                    Text(
+                        text = state.response,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
 
                 is UiState.CompareSuccess -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CopyButton(buildCompareText(state))
                     Text(
                         text = stringResource(R.string.compare_plain_title),
                         style = MaterialTheme.typography.titleSmall
@@ -276,6 +325,7 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                 }
 
                 is UiState.ReasoningSuccess -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CopyButton(buildReasoningText(state))
                     ReasoningSection(stringResource(R.string.r_direct_title), state.direct)
                     ReasoningSection(stringResource(R.string.r_step_title), state.stepByStep)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -310,6 +360,13 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                     }
                     ReasoningSection(stringResource(R.string.r_experts_title), state.experts)
                     ReasoningSection(stringResource(R.string.r_best_title), state.best)
+                }
+
+                is UiState.TemperatureSuccess -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CopyButton(buildTemperatureText(state))
+                    ReasoningSection(stringResource(R.string.t0_title), state.temp0)
+                    ReasoningSection(stringResource(R.string.t07_title), state.temp07)
+                    ReasoningSection(stringResource(R.string.t12_title), state.temp12)
                 }
 
                 is UiState.Error -> Text(
@@ -349,6 +406,45 @@ private fun MethodItem(title: String, description: String) {
             style = MaterialTheme.typography.bodySmall
         )
     }
+}
+
+@Composable
+private fun CopyButton(text: String) {
+    val context = LocalContext.current
+    OutlinedButton(
+        onClick = {
+            val clipboard =
+                context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("LLM response", text))
+            Toast.makeText(context, R.string.copied, Toast.LENGTH_SHORT).show()
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(stringResource(R.string.copy))
+    }
+}
+
+@Composable
+private fun buildCompareText(state: UiState.CompareSuccess): String = buildString {
+    append(stringResource(R.string.compare_plain_title)).append(":\n").append(state.plain)
+    append("\n\n").append(stringResource(R.string.compare_constrained_title)).append(":\n").append(state.constrained)
+}
+
+@Composable
+private fun buildReasoningText(state: UiState.ReasoningSuccess): String = buildString {
+    append(stringResource(R.string.r_direct_title)).append(":\n").append(state.direct)
+    append("\n\n").append(stringResource(R.string.r_step_title)).append(":\n").append(state.stepByStep)
+    append("\n\n").append(stringResource(R.string.r_prompt_title)).append(":\n").append(state.composedPrompt)
+    append("\n\n").append(stringResource(R.string.r_prompt_answer_label)).append(":\n").append(state.promptComposed)
+    append("\n\n").append(stringResource(R.string.r_experts_title)).append(":\n").append(state.experts)
+    append("\n\n").append(stringResource(R.string.r_best_title)).append(":\n").append(state.best)
+}
+
+@Composable
+private fun buildTemperatureText(state: UiState.TemperatureSuccess): String = buildString {
+    append(stringResource(R.string.t0_title)).append(":\n").append(state.temp0)
+    append("\n\n").append(stringResource(R.string.t07_title)).append(":\n").append(state.temp07)
+    append("\n\n").append(stringResource(R.string.t12_title)).append(":\n").append(state.temp12)
 }
 
 @Preview(showBackground = true)
