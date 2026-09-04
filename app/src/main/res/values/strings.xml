@@ -30,6 +30,10 @@
     <string name="t07_description">Стандартное значение: баланс между точностью и естественностью. Для большинства задач.</string>
     <string name="t12_title">temperature = 1.2 (креативность)</string>
     <string name="t12_description">Разнообразные, неожиданные ответы. Для идей, текстов, брейншторма.</string>
+    <string name="models_show">Версии моделей (3 уровня)</string>
+    <string name="models_hide">Скрыть модели</string>
+    <string name="models_run">Запустить сравнение моделей</string>
+    <string name="models_description">Один и тот же запрос выполняется на слабой, средней и сильной модели. Сравните время, токены, стоимость и качество ответов. Модели задаются в local.properties (LLM_MODEL_WEAK / LLM_MODEL_MEDIUM / LLM_MODEL_STRONG).</string>
     <string name="r_direct_title">1. Прямой ответ</string>
     <string name="r_step_title">2. Пошагово</string>
     <string name="r_prompt_title">3. Составленный промпт</string>

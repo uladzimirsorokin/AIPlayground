@@ -8,6 +8,15 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+data class CompletionResult(
+    val content: String,
+    val promptTokens: Int,
+    val completionTokens: Int,
+    val totalTokens: Int,
+    val costUsd: Double,
+    val latencyMs: Long
+)
+
 /**
  * Minimal OpenAI-compatible chat completions client.
  * Sends a POST to {baseUrl}/v1/chat/completions and returns the assistant message.
@@ -27,13 +36,35 @@ class LlmClient(
         responseFormat: String? = null,
         formatInstruction: String? = null,
         temperature: Double? = null
-    ): String = withContext(Dispatchers.IO) {
+    ): String = completeCore(
+        prompt, apiKey, model, systemPrompt, maxTokens, stop, responseFormat, formatInstruction, temperature
+    ).content
+
+    suspend fun completeDetailed(
+        prompt: String,
+        apiKey: String,
+        model: String,
+        systemPrompt: String? = null
+    ): CompletionResult = completeCore(prompt, apiKey, model, systemPrompt, null, null, null, null, null)
+
+    private suspend fun completeCore(
+        prompt: String,
+        apiKey: String,
+        model: String,
+        systemPrompt: String?,
+        maxTokens: Int?,
+        stop: List<String>?,
+        responseFormat: String?,
+        formatInstruction: String?,
+        temperature: Double?
+    ): CompletionResult = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
         val url = URL(endpoint.ifBlank { "$baseUrl/v1/chat/completions" })
         val connection = url.openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 30_000
-            connection.readTimeout = 60_000
+            connection.readTimeout = 120_000
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Authorization", "Bearer $apiKey")
@@ -63,12 +94,22 @@ class LlmClient(
                 throw IllegalStateException("HTTP $code: $text")
             }
 
-            JSONObject(text)
+            val json = JSONObject(text)
+            val content = json
                 .getJSONArray("choices")
                 .getJSONObject(0)
                 .getJSONObject("message")
                 .getString("content")
                 .trim()
+            val usage = json.optJSONObject("usage")
+            CompletionResult(
+                content = content,
+                promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
+                completionTokens = usage?.optInt("completion_tokens", 0) ?: 0,
+                totalTokens = usage?.optInt("total_tokens", 0) ?: 0,
+                costUsd = usage?.optDouble("cost", 0.0) ?: 0.0,
+                latencyMs = System.currentTimeMillis() - start
+            )
         } finally {
             connection.disconnect()
         }

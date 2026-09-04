@@ -51,6 +51,7 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
     var compareExpanded by rememberSaveable { mutableStateOf(false) }
     var reasoningExpanded by rememberSaveable { mutableStateOf(false) }
     var temperatureExpanded by rememberSaveable { mutableStateOf(false) }
+    var modelsExpanded by rememberSaveable { mutableStateOf(false) }
     val uiState by viewModel.uiState.collectAsState()
     val hasKey by viewModel.hasKey.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
@@ -198,6 +199,33 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(stringResource(R.string.temperature_run))
+                        }
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = { modelsExpanded = !modelsExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        stringResource(
+                            if (modelsExpanded) R.string.models_hide else R.string.models_show
+                        )
+                    )
+                }
+
+                if (modelsExpanded) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = stringResource(R.string.models_description),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Button(
+                            onClick = { viewModel.models(prompt) },
+                            enabled = uiState !is UiState.Loading,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.models_run))
                         }
                     }
                 }
@@ -369,6 +397,13 @@ fun HomeScreen(viewModel: HomeViewModel = viewModel()) {
                     ReasoningSection(stringResource(R.string.t12_title), state.temp12)
                 }
 
+                is UiState.ModelSuccess -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CopyButton(buildModelsText(state))
+                    ModelSection(state.weak)
+                    ModelSection(state.medium)
+                    ModelSection(state.strong)
+                }
+
                 is UiState.Error -> Text(
                     text = state.message,
                     color = MaterialTheme.colorScheme.error,
@@ -445,6 +480,35 @@ private fun buildTemperatureText(state: UiState.TemperatureSuccess): String = bu
     append(stringResource(R.string.t0_title)).append(":\n").append(state.temp0)
     append("\n\n").append(stringResource(R.string.t07_title)).append(":\n").append(state.temp07)
     append("\n\n").append(stringResource(R.string.t12_title)).append(":\n").append(state.temp12)
+}
+
+@Composable
+private fun ModelSection(result: UiState.ModelResult) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = "${result.label} — ${result.model}",
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            text = "⏱ ${"%.1f".format(result.timeMs / 1000.0)} с · токены: ${result.totalTokens} · стоимость: \$${"%.6f".format(result.costUsd)}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            text = result.content,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun buildModelsText(state: UiState.ModelSuccess): String = buildString {
+    listOf(state.weak, state.medium, state.strong).forEach { r ->
+        append(r.label).append(" — ").append(r.model).append(":\n")
+        append("⏱ ").append("%.1f".format(r.timeMs / 1000.0)).append(" с, токены: ").append(r.totalTokens)
+        append(", стоимость: $").append("%.6f".format(r.costUsd)).append("\n")
+        append(r.content).append("\n\n")
+    }
 }
 
 @Preview(showBackground = true)

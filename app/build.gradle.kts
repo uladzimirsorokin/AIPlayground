@@ -8,6 +8,9 @@ val localProperties = Properties().apply {
 val llmBaseUrl = localProperties.getProperty("LLM_BASE_URL", "https://api.openai.com")
 val llmEndpoint = localProperties.getProperty("LLM_ENDPOINT", "")
 val llmModel = localProperties.getProperty("LLM_MODEL", "gpt-4o-mini")
+val llmModelWeak = localProperties.getProperty("LLM_MODEL_WEAK", "meta-llama/llama-3.2-3b-instruct")
+val llmModelMedium = localProperties.getProperty("LLM_MODEL_MEDIUM", "deepseek/deepseek-chat")
+val llmModelStrong = localProperties.getProperty("LLM_MODEL_STRONG", "openai/gpt-4o-mini")
 
 plugins {
     alias(libs.plugins.android.application)
@@ -29,6 +32,9 @@ android {
         buildConfigField("String", "LLM_BASE_URL", "\"$llmBaseUrl\"")
         buildConfigField("String", "LLM_ENDPOINT", "\"$llmEndpoint\"")
         buildConfigField("String", "LLM_MODEL", "\"$llmModel\"")
+        buildConfigField("String", "LLM_MODEL_WEAK", "\"$llmModelWeak\"")
+        buildConfigField("String", "LLM_MODEL_MEDIUM", "\"$llmModelMedium\"")
+        buildConfigField("String", "LLM_MODEL_STRONG", "\"$llmModelStrong\"")
     }
 
     buildTypes {

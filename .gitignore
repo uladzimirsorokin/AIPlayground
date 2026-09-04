@@ -21,5 +21,4 @@ local.properties
 *.jks
 *.keystore
 .kotlin/
-AGENTS.md
-experiment_temperature.md
+*.md

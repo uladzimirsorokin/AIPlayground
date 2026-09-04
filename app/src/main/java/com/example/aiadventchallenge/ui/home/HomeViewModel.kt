@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.aiadventchallenge.BuildConfig
 import com.example.aiadventchallenge.data.KeyStorage
 import com.example.aiadventchallenge.data.LlmClient
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,19 @@ sealed interface UiState {
         val temp0: String,
         val temp07: String,
         val temp12: String
+    ) : UiState
+    data class ModelResult(
+        val label: String,
+        val model: String,
+        val content: String,
+        val timeMs: Long,
+        val totalTokens: Int,
+        val costUsd: Double
+    )
+    data class ModelSuccess(
+        val weak: ModelResult,
+        val medium: ModelResult,
+        val strong: ModelResult
     ) : UiState
     data class Error(val message: String) : UiState
 }
@@ -293,6 +307,64 @@ class HomeViewModel(
                 }
             } catch (e: Exception) {
                 Log.e("LLM", "Temperature failed", e)
+                _uiState.value = UiState.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
+
+    fun models(prompt: String) {
+        val task = prompt.trim()
+        if (task.isEmpty()) return
+
+        val apiKey = KeyStorage.load(getApplication())
+        if (apiKey == null) {
+            _uiState.value = UiState.Error("API key is not set")
+            return
+        }
+
+        val system = systemPrompt.value
+        _uiState.value = UiState.Loading
+        viewModelScope.launch {
+            try {
+                coroutineScope {
+                    val weak = async {
+                        val r = client.completeDetailed(
+                            task, apiKey, model = BuildConfig.LLM_MODEL_WEAK, systemPrompt = system
+                        )
+                        UiState.ModelResult(
+                            label = "Слабая", model = BuildConfig.LLM_MODEL_WEAK,
+                            content = r.content, timeMs = r.latencyMs,
+                            totalTokens = r.totalTokens, costUsd = r.costUsd
+                        )
+                    }
+                    val medium = async {
+                        val r = client.completeDetailed(
+                            task, apiKey, model = BuildConfig.LLM_MODEL_MEDIUM, systemPrompt = system
+                        )
+                        UiState.ModelResult(
+                            label = "Средняя", model = BuildConfig.LLM_MODEL_MEDIUM,
+                            content = r.content, timeMs = r.latencyMs,
+                            totalTokens = r.totalTokens, costUsd = r.costUsd
+                        )
+                    }
+                    val strong = async {
+                        val r = client.completeDetailed(
+                            task, apiKey, model = BuildConfig.LLM_MODEL_STRONG, systemPrompt = system
+                        )
+                        UiState.ModelResult(
+                            label = "Сильная", model = BuildConfig.LLM_MODEL_STRONG,
+                            content = r.content, timeMs = r.latencyMs,
+                            totalTokens = r.totalTokens, costUsd = r.costUsd
+                        )
+                    }
+                    _uiState.value = UiState.ModelSuccess(
+                        weak = weak.await(),
+                        medium = medium.await(),
+                        strong = strong.await()
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("LLM", "Models failed", e)
                 _uiState.value = UiState.Error(e.message ?: "Unknown error")
             }
         }
