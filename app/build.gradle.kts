@@ -10,7 +10,7 @@ val llmEndpoint = localProperties.getProperty("LLM_ENDPOINT", "")
 val llmModel = localProperties.getProperty("LLM_MODEL", "gpt-4o-mini")
 val llmModelWeak = localProperties.getProperty("LLM_MODEL_WEAK", "meta-llama/llama-3.2-3b-instruct")
 val llmModelMedium = localProperties.getProperty("LLM_MODEL_MEDIUM", "deepseek/deepseek-chat")
-val llmModelStrong = localProperties.getProperty("LLM_MODEL_STRONG", "openai/gpt-4o-mini")
+val llmModelStrong = localProperties.getProperty("LLM_MODEL_STRONG", "z-ai/glm-5.3")
 
 plugins {
     alias(libs.plugins.android.application)

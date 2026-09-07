@@ -8,6 +8,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+data class ChatMessage(val role: String, val content: String)
+
 data class CompletionResult(
     val content: String,
     val promptTokens: Int,
@@ -36,26 +38,45 @@ class LlmClient(
         responseFormat: String? = null,
         formatInstruction: String? = null,
         temperature: Double? = null
-    ): String = completeCore(
-        prompt, apiKey, model, systemPrompt, maxTokens, stop, responseFormat, formatInstruction, temperature
-    ).content
+    ): String {
+        val userContent = if (formatInstruction != null) "$prompt\n\n$formatInstruction" else prompt
+        val messages = buildList {
+            systemPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+            add(ChatMessage("user", userContent))
+        }
+        return postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature).content
+    }
 
     suspend fun completeDetailed(
         prompt: String,
         apiKey: String,
         model: String,
         systemPrompt: String? = null
-    ): CompletionResult = completeCore(prompt, apiKey, model, systemPrompt, null, null, null, null, null)
+    ): CompletionResult {
+        val messages = buildList {
+            systemPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+            add(ChatMessage("user", prompt))
+        }
+        return postChat(messages, apiKey, model, null, null, null, null)
+    }
 
-    private suspend fun completeCore(
-        prompt: String,
+    suspend fun completeChat(
+        messages: List<ChatMessage>,
+        apiKey: String,
+        model: String = this.model,
+        maxTokens: Int? = null,
+        stop: List<String>? = null,
+        responseFormat: String? = null,
+        temperature: Double? = null
+    ): CompletionResult = postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature)
+
+    private suspend fun postChat(
+        messages: List<ChatMessage>,
         apiKey: String,
         model: String,
-        systemPrompt: String?,
         maxTokens: Int?,
         stop: List<String>?,
         responseFormat: String?,
-        formatInstruction: String?,
         temperature: Double?
     ): CompletionResult = withContext(Dispatchers.IO) {
         val start = System.currentTimeMillis()
@@ -70,16 +91,13 @@ class LlmClient(
             connection.setRequestProperty("Authorization", "Bearer $apiKey")
             connection.doOutput = true
 
-            val userContent = if (formatInstruction != null) "$prompt\n\n$formatInstruction" else prompt
-            val messages = JSONArray().apply {
-                systemPrompt?.takeIf { it.isNotBlank() }?.let {
-                    put(JSONObject().put("role", "system").put("content", it))
-                }
-                put(JSONObject().put("role", "user").put("content", userContent))
+            val messagesArray = JSONArray()
+            messages.forEach { m ->
+                messagesArray.put(JSONObject().put("role", m.role).put("content", m.content))
             }
             val body = JSONObject()
                 .put("model", model)
-                .put("messages", messages)
+                .put("messages", messagesArray)
             maxTokens?.let { body.put("max_tokens", it) }
             stop?.let { body.put("stop", JSONArray().apply { it.forEach(::put) }) }
             responseFormat?.let { body.put("response_format", JSONObject().put("type", it)) }

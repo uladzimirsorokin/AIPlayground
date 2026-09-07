@@ -50,4 +50,17 @@
     <string name="idle_hint">Введите задачу в поле «Запрос к LLM» и нажмите «Отправить» (обычный ответ), либо раскройте «Рассуждения» или «Сравнение».</string>
     <string name="copy">Копировать</string>
     <string name="copied">Скопировано</string>
+    <string name="agent_button">Чат с агентом</string>
+    <string name="agent_title">Агент</string>
+    <string name="agent_clear">Очистить историю</string>
+    <string name="agent_input_hint">Сообщение…</string>
+    <string name="agent_empty">Напишите сообщение — агент ответит с учётом контекста диалога.</string>
+    <string name="agent_typing">Агент печатает…</string>
+    <string name="agent_settings">Настройки</string>
+    <string name="settings_title">Настройки агента</string>
+    <string name="settings_done">Готово</string>
+    <string name="settings_system_prompt">System prompt</string>
+    <string name="settings_temperature">Температура: %1$.1f</string>
+    <string name="settings_model">Модель</string>
+    <string name="settings_json">JSON-формат ответа</string>
 </resources>
