@@ -61,6 +61,7 @@ fun AgentScreen(
     val messages by viewModel.messages.collectAsState()
     val sending by viewModel.sending.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val hasSavedContext by viewModel.hasSavedContext.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -128,7 +129,9 @@ fun AgentScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = stringResource(R.string.agent_empty),
+                    text = stringResource(
+                        if (hasSavedContext) R.string.agent_empty_context else R.string.agent_empty
+                    ),
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -297,11 +300,20 @@ private fun MessageBubble(message: ChatMessage) {
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth(0.85f)
         ) {
-            Text(
-                text = message.content,
-                modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = message.content,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                message.tokens?.let { tokens ->
+                    Text(
+                        text = stringResource(R.string.agent_tokens, tokens),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
         }
     }
 }

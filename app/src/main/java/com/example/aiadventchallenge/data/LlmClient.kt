@@ -8,7 +8,11 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class ChatMessage(val role: String, val content: String)
+data class ChatMessage(
+    val role: String,
+    val content: String,
+    val tokens: Int? = null
+)
 
 data class CompletionResult(
     val content: String,

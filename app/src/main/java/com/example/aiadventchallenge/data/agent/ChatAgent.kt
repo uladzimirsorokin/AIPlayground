@@ -14,7 +14,8 @@ class ChatAgent(
     private val apiKey: () -> String?,
     private val model: () -> String,
     private val temperature: () -> Double?,
-    private val jsonFormat: () -> Boolean
+    private val jsonFormat: () -> Boolean,
+    private val historyStore: HistoryStore
 ) : Agent {
 
     private companion object {
@@ -22,7 +23,7 @@ class ChatAgent(
             "Отвечай строго в JSON без markdown и пояснений."
     }
 
-    private val _history = mutableListOf<ChatMessage>()
+    private val _history = mutableListOf<ChatMessage>().apply { addAll(historyStore.load()) }
     override val history: List<ChatMessage> get() = _history.toList()
 
     override suspend fun send(userMessage: String): AgentResponse {
@@ -44,10 +45,12 @@ class ChatAgent(
         )
 
         _history.add(ChatMessage("assistant", result.content))
+        historyStore.save(_history)
         return AgentResponse(reply = result.content, tokensUsed = result.totalTokens)
     }
 
     override fun clearHistory() {
         _history.clear()
+        historyStore.clear()
     }
 }

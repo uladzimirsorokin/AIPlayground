@@ -55,7 +55,9 @@
     <string name="agent_clear">Очистить историю</string>
     <string name="agent_input_hint">Сообщение…</string>
     <string name="agent_empty">Напишите сообщение — агент ответит с учётом контекста диалога.</string>
+    <string name="agent_empty_context">Напишите сообщение — агент помнит предыдущий диалог и продолжит его, даже если старые сообщения здесь не показаны.</string>
     <string name="agent_typing">Агент печатает…</string>
+    <string name="agent_tokens">· %1$d токенов</string>
     <string name="agent_settings">Настройки</string>
     <string name="settings_title">Настройки агента</string>
     <string name="settings_done">Готово</string>

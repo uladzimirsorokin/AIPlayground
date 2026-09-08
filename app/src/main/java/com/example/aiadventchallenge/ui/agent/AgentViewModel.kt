@@ -10,6 +10,7 @@ import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.KeyStorage
 import com.example.aiadventchallenge.data.LlmClient
 import com.example.aiadventchallenge.data.agent.ChatAgent
+import com.example.aiadventchallenge.data.agent.DatabaseHistoryStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,17 +49,23 @@ class AgentViewModel(
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
 
+    private val historyStore = DatabaseHistoryStore(getApplication())
+
     private val agent = ChatAgent(
         client = LlmClient(),
         systemPrompt = { _settings.value.systemPrompt },
         apiKey = { KeyStorage.load(getApplication()) },
         model = { _settings.value.model },
         temperature = { _settings.value.temperature.toDouble() },
-        jsonFormat = { _settings.value.jsonFormat }
+        jsonFormat = { _settings.value.jsonFormat },
+        historyStore = historyStore
     )
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+
+    private val _hasSavedContext = MutableStateFlow(historyStore.load().isNotEmpty())
+    val hasSavedContext: StateFlow<Boolean> = _hasSavedContext.asStateFlow()
 
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
@@ -83,7 +90,11 @@ class AgentViewModel(
         viewModelScope.launch {
             try {
                 val response = agent.send(trimmed)
-                _messages.value = _messages.value + ChatMessage("assistant", response.reply)
+                _messages.value = _messages.value + ChatMessage(
+                    role = "assistant",
+                    content = response.reply,
+                    tokens = response.tokensUsed
+                )
             } catch (e: Exception) {
                 Log.e("AGENT", "Agent failed", e)
                 _messages.value =
@@ -97,5 +108,6 @@ class AgentViewModel(
     fun clearChat() {
         agent.clearHistory()
         _messages.value = emptyList()
+        _hasSavedContext.value = false
     }
 }
