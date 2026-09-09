@@ -5,6 +5,7 @@
     <string name="prompt_label">Запрос к LLM</string>
     <string name="system_prompt_label">System prompt</string>
     <string name="send">Отправить</string>
+    <string name="retry">Повторить</string>
     <string name="compare">Сравнить</string>
     <string name="compare_show">Сравнение с ограничениями</string>
     <string name="compare_hide">Скрыть сравнение</string>
@@ -57,7 +58,10 @@
     <string name="agent_empty">Напишите сообщение — агент ответит с учётом контекста диалога.</string>
     <string name="agent_empty_context">Напишите сообщение — агент помнит предыдущий диалог и продолжит его, даже если старые сообщения здесь не показаны.</string>
     <string name="agent_typing">Агент печатает…</string>
-    <string name="agent_tokens">· %1$d токенов</string>
+    <string name="agent_bubble_tokens">· вх %1$d · вых %2$d</string>
+    <string name="agent_compacted">контекст сжат</string>
+    <string name="agent_truncated">урезан провайдером</string>
+    <string name="agent_stats">Запросы: %1$d · всего токенов: %2$d · контекст: ~%3$d · ~$%4$s</string>
     <string name="agent_settings">Настройки</string>
     <string name="settings_title">Настройки агента</string>
     <string name="settings_done">Готово</string>
@@ -65,4 +69,5 @@
     <string name="settings_temperature">Температура: %1$.1f</string>
     <string name="settings_model">Модель</string>
     <string name="settings_json">JSON-формат ответа</string>
+    <string name="settings_compact">Сжатие контекста при переполнении</string>
 </resources>

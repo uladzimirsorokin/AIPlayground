@@ -11,7 +11,11 @@ import java.net.URL
 data class ChatMessage(
     val role: String,
     val content: String,
-    val tokens: Int? = null
+    val inputTokens: Int? = null,
+    val outputTokens: Int? = null,
+    val model: String? = null,
+    val compacted: Boolean = false,
+    val truncated: Boolean = false
 )
 
 data class CompletionResult(
@@ -20,7 +24,8 @@ data class CompletionResult(
     val completionTokens: Int,
     val totalTokens: Int,
     val costUsd: Double,
-    val latencyMs: Long
+    val latencyMs: Long,
+    val model: String? = null
 )
 
 /**
@@ -102,6 +107,14 @@ class LlmClient(
             val body = JSONObject()
                 .put("model", model)
                 .put("messages", messagesArray)
+                .put(
+                    "plugins",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("id", "context-compression")
+                            .put("enabled", false)
+                    )
+                )
             maxTokens?.let { body.put("max_tokens", it) }
             stop?.let { body.put("stop", JSONArray().apply { it.forEach(::put) }) }
             responseFormat?.let { body.put("response_format", JSONObject().put("type", it)) }
@@ -130,7 +143,8 @@ class LlmClient(
                 completionTokens = usage?.optInt("completion_tokens", 0) ?: 0,
                 totalTokens = usage?.optInt("total_tokens", 0) ?: 0,
                 costUsd = usage?.optDouble("cost", 0.0) ?: 0.0,
-                latencyMs = System.currentTimeMillis() - start
+                latencyMs = System.currentTimeMillis() - start,
+                model = json.optString("model", null)?.takeIf { it.isNotBlank() }
             )
         } finally {
             connection.disconnect()

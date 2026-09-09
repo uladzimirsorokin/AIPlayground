@@ -11,6 +11,8 @@ val llmModel = localProperties.getProperty("LLM_MODEL", "gpt-4o-mini")
 val llmModelWeak = localProperties.getProperty("LLM_MODEL_WEAK", "meta-llama/llama-3.2-3b-instruct")
 val llmModelMedium = localProperties.getProperty("LLM_MODEL_MEDIUM", "deepseek/deepseek-chat")
 val llmModelStrong = localProperties.getProperty("LLM_MODEL_STRONG", "z-ai/glm-5.3")
+val llmModelTest = localProperties.getProperty("LLM_MODEL_TEST", "")
+val llmContextLimit = localProperties.getProperty("LLM_CONTEXT_LIMIT", "131072")
 
 plugins {
     alias(libs.plugins.android.application)
@@ -35,6 +37,8 @@ android {
         buildConfigField("String", "LLM_MODEL_WEAK", "\"$llmModelWeak\"")
         buildConfigField("String", "LLM_MODEL_MEDIUM", "\"$llmModelMedium\"")
         buildConfigField("String", "LLM_MODEL_STRONG", "\"$llmModelStrong\"")
+        buildConfigField("String", "LLM_MODEL_TEST", "\"$llmModelTest\"")
+        buildConfigField("int", "LLM_CONTEXT_LIMIT", "$llmContextLimit")
     }
 
     buildTypes {

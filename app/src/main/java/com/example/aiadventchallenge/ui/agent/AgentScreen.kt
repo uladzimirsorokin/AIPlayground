@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
@@ -61,6 +62,9 @@ fun AgentScreen(
     val messages by viewModel.messages.collectAsState()
     val sending by viewModel.sending.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val stats by viewModel.stats.collectAsState()
+    val canRetry by viewModel.canRetry.collectAsState()
+    val historyTokens by viewModel.historyTokens.collectAsState()
     val hasSavedContext by viewModel.hasSavedContext.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -95,28 +99,48 @@ fun AgentScreen(
             )
         },
         bottomBar = {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text(stringResource(R.string.agent_input_hint)) },
-                    maxLines = 3
+                Text(
+                    text = stringResource(
+                        R.string.agent_stats,
+                        stats.requests,
+                        stats.totalTokens,
+                        historyTokens,
+                        "%.6f".format(stats.costUsd)
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
                 )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        viewModel.send(input)
-                        input = ""
-                    },
-                    enabled = !sending
-                ) {
-                    Text(stringResource(R.string.send))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text(stringResource(R.string.agent_input_hint)) },
+                        maxLines = 3
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    if (canRetry) {
+                        OutlinedButton(onClick = viewModel::retry) {
+                            Text(stringResource(R.string.retry))
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                viewModel.send(input)
+                                input = ""
+                            },
+                            enabled = !sending
+                        ) {
+                            Text(stringResource(R.string.send))
+                        }
+                    }
                 }
             }
         }
@@ -226,6 +250,21 @@ private fun AgentSettingsDialog(
                         onCheckedChange = { onChange(settings.copy(jsonFormat = it)) }
                     )
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_compact),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Switch(
+                        checked = settings.compactContext,
+                        onCheckedChange = { onChange(settings.copy(compactContext = it)) }
+                    )
+                }
             }
         },
         confirmButton = {
@@ -286,6 +325,16 @@ private fun TypingBubble() {
 
 @Composable
 private fun MessageBubble(message: ChatMessage) {
+    if (message.role == "system") {
+        Text(
+            text = message.content,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center
+        )
+        return
+    }
     val isUser = message.role == "user"
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -305,9 +354,18 @@ private fun MessageBubble(message: ChatMessage) {
                     text = message.content,
                     style = MaterialTheme.typography.bodyMedium
                 )
-                message.tokens?.let { tokens ->
+                message.outputTokens?.let { out ->
                     Text(
-                        text = stringResource(R.string.agent_tokens, tokens),
+                        text = buildString {
+                            append(stringResource(R.string.agent_bubble_tokens, message.inputTokens ?: 0, out))
+                            message.model?.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+                            if (message.compacted) {
+                                append(" · ").append(stringResource(R.string.agent_compacted))
+                            }
+                            if (message.truncated) {
+                                append(" · ").append(stringResource(R.string.agent_truncated))
+                            }
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)

@@ -9,6 +9,7 @@ import com.example.aiadventchallenge.BuildConfig
 import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.KeyStorage
 import com.example.aiadventchallenge.data.LlmClient
+import com.example.aiadventchallenge.data.agent.AgentStats
 import com.example.aiadventchallenge.data.agent.ChatAgent
 import com.example.aiadventchallenge.data.agent.DatabaseHistoryStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +21,8 @@ data class AgentSettings(
     val systemPrompt: String,
     val temperature: Float,
     val model: String,
-    val jsonFormat: Boolean
+    val jsonFormat: Boolean,
+    val compactContext: Boolean
 )
 
 class AgentViewModel(
@@ -34,8 +36,9 @@ class AgentViewModel(
         BuildConfig.LLM_MODEL,
         BuildConfig.LLM_MODEL_WEAK,
         BuildConfig.LLM_MODEL_MEDIUM,
-        BuildConfig.LLM_MODEL_STRONG
-    ).distinct()
+        BuildConfig.LLM_MODEL_STRONG,
+        BuildConfig.LLM_MODEL_TEST
+    ).filter { it.isNotBlank() }.distinct()
 
     private val _settings = MutableStateFlow(
         AgentSettings(
@@ -44,7 +47,8 @@ class AgentViewModel(
             temperature = prefs.getFloat("agent_temperature", 0.7f),
             model = prefs.getString("agent_model", BuildConfig.LLM_MODEL)
                 ?: BuildConfig.LLM_MODEL,
-            jsonFormat = prefs.getBoolean("agent_json_format", false)
+            jsonFormat = prefs.getBoolean("agent_json_format", false),
+            compactContext = prefs.getBoolean("agent_compact_context", true)
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
@@ -58,6 +62,7 @@ class AgentViewModel(
         model = { _settings.value.model },
         temperature = { _settings.value.temperature.toDouble() },
         jsonFormat = { _settings.value.jsonFormat },
+        compactContext = { _settings.value.compactContext },
         historyStore = historyStore
     )
 
@@ -66,6 +71,69 @@ class AgentViewModel(
 
     private val _hasSavedContext = MutableStateFlow(historyStore.load().isNotEmpty())
     val hasSavedContext: StateFlow<Boolean> = _hasSavedContext.asStateFlow()
+
+    private val _stats = MutableStateFlow(AgentStats())
+    val stats: StateFlow<AgentStats> = _stats.asStateFlow()
+
+    private val _canRetry = MutableStateFlow(false)
+    val canRetry: StateFlow<Boolean> = _canRetry.asStateFlow()
+
+    private val _historyTokens = MutableStateFlow(agent.historyEstimateTokens)
+    val historyTokens: StateFlow<Int> = _historyTokens.asStateFlow()
+
+    private var pendingText: String? = null
+
+    fun send(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || _sending.value) return
+        pendingText = trimmed
+        executeSend(addUserBubble = true)
+    }
+
+    fun retry() {
+        if (_sending.value || pendingText == null) return
+        _messages.value = _messages.value.filterNot { it.isErrorBubble() }
+        executeSend(addUserBubble = false)
+    }
+
+    private fun executeSend(addUserBubble: Boolean) {
+        val text = pendingText ?: return
+        if (addUserBubble) {
+            _messages.value = _messages.value + ChatMessage("user", text)
+        }
+        _sending.value = true
+        _canRetry.value = false
+        viewModelScope.launch {
+            try {
+                val response = agent.send(text)
+                pendingText = null
+                if (response.compacted) {
+                    _messages.value = _messages.value + ChatMessage(
+                        role = "system",
+                        content = "Контекст диалога сжат: ранние сообщения свернуты в резюме."
+                    )
+                }
+                _messages.value = _messages.value + ChatMessage(
+                    role = "assistant",
+                    content = response.reply,
+                    inputTokens = response.promptTokens,
+                    outputTokens = response.completionTokens,
+                    model = response.model,
+                    compacted = response.compacted,
+                    truncated = response.truncated
+                )
+                _stats.value = response.stats
+            } catch (e: Exception) {
+                Log.e("AGENT", "Agent failed", e)
+                _messages.value =
+                    _messages.value + ChatMessage("assistant", "Ошибка: ${e.message ?: "неизвестная"}")
+                _canRetry.value = true
+            } finally {
+                _sending.value = false
+                _historyTokens.value = agent.historyEstimateTokens
+            }
+        }
+    }
 
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
@@ -77,37 +145,21 @@ class AgentViewModel(
             .putFloat("agent_temperature", new.temperature)
             .putString("agent_model", new.model)
             .putBoolean("agent_json_format", new.jsonFormat)
+            .putBoolean("agent_compact_context", new.compactContext)
             .apply()
         _settings.value = new
-    }
-
-    fun send(text: String) {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty() || _sending.value) return
-
-        _messages.value = _messages.value + ChatMessage("user", trimmed)
-        _sending.value = true
-        viewModelScope.launch {
-            try {
-                val response = agent.send(trimmed)
-                _messages.value = _messages.value + ChatMessage(
-                    role = "assistant",
-                    content = response.reply,
-                    tokens = response.tokensUsed
-                )
-            } catch (e: Exception) {
-                Log.e("AGENT", "Agent failed", e)
-                _messages.value =
-                    _messages.value + ChatMessage("assistant", "Ошибка: ${e.message ?: "неизвестная"}")
-            } finally {
-                _sending.value = false
-            }
-        }
     }
 
     fun clearChat() {
         agent.clearHistory()
         _messages.value = emptyList()
         _hasSavedContext.value = false
+        _stats.value = AgentStats()
+        _canRetry.value = false
+        _historyTokens.value = 0
+        pendingText = null
     }
 }
+
+private fun ChatMessage.isErrorBubble(): Boolean =
+    role == "assistant" && content.startsWith("Ошибка")
