@@ -13,7 +13,9 @@ data class AgentStats(
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
     val totalTokens: Long = 0,
-    val costUsd: Double = 0.0
+    val costUsd: Double = 0.0,
+    val compactions: Int = 0,
+    val savedTokens: Long = 0
 )
 
 data class AgentResponse(

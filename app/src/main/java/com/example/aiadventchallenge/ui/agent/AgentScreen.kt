@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.data.ChatMessage
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,6 +113,17 @@ fun AgentScreen(
                         stats.totalTokens,
                         historyTokens,
                         "%.6f".format(stats.costUsd)
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                Text(
+                    text = stringResource(
+                        R.string.agent_stats_compact,
+                        stats.compactions,
+                        stats.savedTokens,
+                        viewModel.summaryLength
                     ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -264,6 +276,24 @@ private fun AgentSettingsDialog(
                         checked = settings.compactContext,
                         onCheckedChange = { onChange(settings.copy(compactContext = it)) }
                     )
+                }
+
+                if (settings.compactContext) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_window, settings.historyWindow),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Slider(
+                            value = settings.historyWindow.toFloat(),
+                            onValueChange = { onChange(settings.copy(historyWindow = it.roundToInt())) },
+                            valueRange = 5f..30f
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_window_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
             }
         },

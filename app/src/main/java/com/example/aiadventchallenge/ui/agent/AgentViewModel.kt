@@ -22,7 +22,8 @@ data class AgentSettings(
     val temperature: Float,
     val model: String,
     val jsonFormat: Boolean,
-    val compactContext: Boolean
+    val compactContext: Boolean,
+    val historyWindow: Int
 )
 
 class AgentViewModel(
@@ -48,7 +49,8 @@ class AgentViewModel(
             model = prefs.getString("agent_model", BuildConfig.LLM_MODEL)
                 ?: BuildConfig.LLM_MODEL,
             jsonFormat = prefs.getBoolean("agent_json_format", false),
-            compactContext = prefs.getBoolean("agent_compact_context", true)
+            compactContext = prefs.getBoolean("agent_compact_context", true),
+            historyWindow = prefs.getInt("agent_history_window", 10)
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
@@ -63,13 +65,16 @@ class AgentViewModel(
         temperature = { _settings.value.temperature.toDouble() },
         jsonFormat = { _settings.value.jsonFormat },
         compactContext = { _settings.value.compactContext },
+        historyWindow = { _settings.value.historyWindow },
         historyStore = historyStore
     )
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
-    private val _hasSavedContext = MutableStateFlow(historyStore.load().isNotEmpty())
+    private val _hasSavedContext = MutableStateFlow(
+        historyStore.load().isNotEmpty() || historyStore.loadSummary().isNotEmpty()
+    )
     val hasSavedContext: StateFlow<Boolean> = _hasSavedContext.asStateFlow()
 
     private val _stats = MutableStateFlow(AgentStats())
@@ -80,6 +85,8 @@ class AgentViewModel(
 
     private val _historyTokens = MutableStateFlow(agent.historyEstimateTokens)
     val historyTokens: StateFlow<Int> = _historyTokens.asStateFlow()
+
+    val summaryLength: Int get() = agent.summaryText.length
 
     private var pendingText: String? = null
 
@@ -146,6 +153,7 @@ class AgentViewModel(
             .putString("agent_model", new.model)
             .putBoolean("agent_json_format", new.jsonFormat)
             .putBoolean("agent_compact_context", new.compactContext)
+            .putInt("agent_history_window", new.historyWindow)
             .apply()
         _settings.value = new
     }

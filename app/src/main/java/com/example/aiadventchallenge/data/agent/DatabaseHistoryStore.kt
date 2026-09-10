@@ -13,6 +13,7 @@ import com.example.aiadventchallenge.data.ChatMessage
 class DatabaseHistoryStore(context: Context) : HistoryStore {
 
     private val helper = HistoryDbHelper(context)
+    private val summaryPrefs = context.getSharedPreferences("agent_history", Context.MODE_PRIVATE)
 
     override fun load(): List<ChatMessage> {
         val db = helper.readableDatabase
@@ -49,8 +50,15 @@ class DatabaseHistoryStore(context: Context) : HistoryStore {
         }
     }
 
+    override fun loadSummary(): String = summaryPrefs.getString("summary", "") ?: ""
+
+    override fun saveSummary(summary: String) {
+        summaryPrefs.edit().putString("summary", summary).apply()
+    }
+
     override fun clear() {
         helper.writableDatabase.delete(TABLE, null, null)
+        summaryPrefs.edit().remove("summary").apply()
     }
 
     private class HistoryDbHelper(context: Context) :

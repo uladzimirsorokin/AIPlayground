@@ -6,11 +6,13 @@ import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.LlmClient
 
 /**
- * Simple conversational agent with dialogue memory.
- * Encapsulates the full request/response cycle: keeps conversation history,
- * sends it to the LLM and appends the assistant's reply back to the history.
- * Tracks token usage (per request and cumulative) and guards the model's context limit:
- * on overflow the older history is compressed into a summary instead of erroring.
+ * Conversational agent with dialogue memory and history compression.
+ *
+ * The FULL history is always kept in storage. When compression is enabled,
+ * only the last N messages are sent verbatim, older messages are folded into
+ * a rolling summary (an extra LLM call) which is sent instead of the full
+ * history — so tokens stay bounded. With compression disabled the whole
+ * history is sent, so nothing is ever lost.
  */
 class ChatAgent(
     private val client: LlmClient,
@@ -20,6 +22,7 @@ class ChatAgent(
     private val temperature: () -> Double?,
     private val jsonFormat: () -> Boolean,
     private val compactContext: () -> Boolean,
+    private val historyWindow: () -> Int,
     private val historyStore: HistoryStore,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
@@ -36,29 +39,64 @@ class ChatAgent(
     private val _history = mutableListOf<ChatMessage>().apply { addAll(historyStore.load()) }
     override val history: List<ChatMessage> get() = _history.toList()
 
-    val historyEstimateTokens: Int get() = _history.sumOf { it.content.length } / 3
+    private var summary = historyStore.loadSummary()
+    val summaryText: String get() = summary
+
+    val historyEstimateTokens: Int
+        get() = if (compactContext()) {
+            estimate(_history.takeLast(historyWindow())) + summary.length / 3
+        } else {
+            estimate(_history)
+        }
 
     private var stats = AgentStats()
+    private var compactCount = 0
+    private var savedTokens = 0L
 
     override suspend fun send(userMessage: String): AgentResponse {
         val key = apiKey() ?: throw IllegalStateException("API key is not set")
+        val compactOn = compactContext()
+        val window = historyWindow()
         Log.d(
             "AGENT",
             "send: history=${_history.size}msgs chars=${_history.sumOf { it.content.length }} " +
-                "model=${model()} compactOn=${compactContext()} limit=$contextLimit"
+                "summary=${summary.length} model=${model()} compactOn=$compactOn window=$window limit=$contextLimit"
         )
 
-        val compacted = if (compactContext()) ensureFits(key, userMessage) else false
+        var compacted = false
+        if (compactOn) {
+            if (_history.size > window + window) {
+                foldIntoSummary(key, keep = window)
+                compacted = true
+            }
+            if (ensureFits(key)) compacted = true
+        }
 
         val json = jsonFormat()
         val content = if (json) "$userMessage\n\n$FORMAT_DESCRIPTION" else userMessage
         _history.add(ChatMessage("user", content))
 
+        val recentCount = if (compactOn) {
+            var n = window
+            while (n > 1 && estimate(_history.takeLast(n)) + summary.length / 3 > contextLimit) n--
+            n
+        } else {
+            _history.size
+        }
+
         val messages = buildList {
             systemPrompt().takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
-            addAll(_history)
+            if (compactOn) {
+                summary.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", summary)) }
+                _history.takeLast(recentCount).forEach { add(it) }
+            } else {
+                _history.forEach { add(it) }
+            }
         }
+
         val sentChars = messages.sumOf { it.content.length }
+        savedTokens += (estimate(_history) - estimate(messages)).coerceAtLeast(0)
+
         val result = try {
             client.completeChat(
                 messages,
@@ -76,10 +114,11 @@ class ChatAgent(
 
         _history.add(ChatMessage("assistant", result.content))
         historyStore.save(_history)
+        historyStore.saveSummary(summary)
         Log.d(
             "AGENT",
             "done: model=${result.model} in=${result.promptTokens} out=${result.completionTokens} " +
-                "history=${_history.size}msgs compacted=$compacted"
+                "history=${_history.size}msgs summary=${summary.length} compacted=$compacted"
         )
 
         stats = AgentStats(
@@ -87,7 +126,9 @@ class ChatAgent(
             inputTokens = stats.inputTokens + result.promptTokens,
             outputTokens = stats.outputTokens + result.completionTokens,
             totalTokens = stats.totalTokens + result.totalTokens,
-            costUsd = stats.costUsd + result.costUsd
+            costUsd = stats.costUsd + result.costUsd,
+            compactions = compactCount,
+            savedTokens = savedTokens
         )
 
         return AgentResponse(
@@ -105,46 +146,53 @@ class ChatAgent(
 
     override fun clearHistory() {
         _history.clear()
+        summary = ""
         historyStore.clear()
         stats = AgentStats()
+        compactCount = 0
+        savedTokens = 0L
     }
 
     /**
-     * If the dialogue is about to exceed the context limit, compress the older
-     * messages into a summary (or drop them) so the dialogue can continue.
+     * Folds all messages beyond the last [keep] into the rolling summary.
+     * Messages stay in the full history; only the summary is updated.
      */
-    private suspend fun ensureFits(key: String, pending: String): Boolean {
-        if (estimatedTokens(_history) + pending.length / 3 <= contextLimit) return false
+    private suspend fun foldIntoSummary(key: String, keep: Int) {
+        val recent = _history.takeLast(keep)
+        val old = _history.dropLast(keep)
+        if (old.isEmpty()) return
 
-        val old = _history.dropLast(KEEP_RECENT)
-        val recent = _history.takeLast(KEEP_RECENT)
-        _history.clear()
-        if (old.isNotEmpty()) {
-            val summary = try {
-                client.completeChat(
-                    buildList {
-                        add(ChatMessage("system", SUMMARY_PROMPT))
-                        addAll(old)
-                    },
-                    key,
-                    model = model()
-                ).content.trim()
-            } catch (e: Exception) {
-                null
-            }
-            if (summary != null && summary.isNotEmpty()) {
-                _history.add(ChatMessage("system", "Сжатый контекст предыдущего диалога: $summary"))
-            }
+        val merged = buildList {
+            summary.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", summary)) }
+            addAll(old)
         }
-        _history.addAll(recent)
+        val newSummary = try {
+            client.completeChat(
+                buildList {
+                    add(ChatMessage("system", SUMMARY_PROMPT))
+                    addAll(merged)
+                },
+                key,
+                model = model()
+            ).content.trim()
+        } catch (e: Exception) {
+            summary
+        }
+        if (newSummary.isNotBlank()) summary = newSummary
+        compactCount++
+        Log.d("AGENT", "fold: folded=${old.size}msgs summary=${summary.length}")
+        historyStore.saveSummary(summary)
+    }
 
-        while (estimatedTokens(_history) + pending.length / 3 > contextLimit && _history.isNotEmpty()) {
-            _history.removeAt(0)
-        }
-        historyStore.save(_history)
+    /**
+     * If the summary plus the last few messages would exceed the limit,
+     * fold aggressively. The request builder reduces the window further if needed.
+     */
+    private suspend fun ensureFits(key: String): Boolean {
+        if (estimate(_history.takeLast(KEEP_RECENT)) + summary.length / 3 <= contextLimit) return false
+        if (_history.size > KEEP_RECENT) foldIntoSummary(key, keep = KEEP_RECENT)
         return true
     }
 
-    private fun estimatedTokens(messages: List<ChatMessage>): Int =
-        messages.sumOf { it.content.length } / 3
+    private fun estimate(messages: List<ChatMessage>): Int = messages.sumOf { it.content.length } / 3
 }

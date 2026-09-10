@@ -9,6 +9,8 @@ interface HistoryStore {
     fun load(): List<ChatMessage>
     fun save(messages: List<ChatMessage>)
     fun clear()
+    fun loadSummary(): String
+    fun saveSummary(summary: String)
 }
 
 /**
@@ -42,7 +44,13 @@ class JsonHistoryStore(context: Context) : HistoryStore {
         prefs.edit().putString("messages", array.toString()).apply()
     }
 
+    override fun loadSummary(): String = prefs.getString("summary", "") ?: ""
+
+    override fun saveSummary(summary: String) {
+        prefs.edit().putString("summary", summary).apply()
+    }
+
     override fun clear() {
-        prefs.edit().remove("messages").apply()
+        prefs.edit().remove("messages").remove("summary").apply()
     }
 }

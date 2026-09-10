@@ -62,6 +62,7 @@
     <string name="agent_compacted">контекст сжат</string>
     <string name="agent_truncated">урезан провайдером</string>
     <string name="agent_stats">Запросы: %1$d · всего токенов: %2$d · контекст: ~%3$d · ~$%4$s</string>
+    <string name="agent_stats_compact">Сжатий: %1$d · сэкономлено: ~%2$d токенов · резюме: ~%3$d симв.</string>
     <string name="agent_settings">Настройки</string>
     <string name="settings_title">Настройки агента</string>
     <string name="settings_done">Готово</string>
@@ -70,4 +71,6 @@
     <string name="settings_model">Модель</string>
     <string name="settings_json">JSON-формат ответа</string>
     <string name="settings_compact">Сжатие контекста при переполнении</string>
+    <string name="settings_window">Сообщений до сжатия: %1$d</string>
+    <string name="settings_window_desc">Последние N сообщений хранятся как есть, старшие сворачиваются в summary.</string>
 </resources>
