@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.data.ChatMessage
+import com.example.aiadventchallenge.data.agent.ContextStrategy
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,6 +68,8 @@ fun AgentScreen(
     val canRetry by viewModel.canRetry.collectAsState()
     val historyTokens by viewModel.historyTokens.collectAsState()
     val hasSavedContext by viewModel.hasSavedContext.collectAsState()
+    val branchNames by viewModel.branchNames.collectAsState()
+    val activeBranch by viewModel.activeBranch.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -106,6 +109,15 @@ fun AgentScreen(
                     .padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (settings.strategy == ContextStrategy.BRANCHING) {
+                    BranchControls(
+                        branches = branchNames,
+                        active = activeBranch,
+                        onSwitch = viewModel::switchBranch,
+                        onCheckpoint = viewModel::saveCheckpoint,
+                        onFork = viewModel::forkFromCheckpoint
+                    )
+                }
                 Text(
                     text = stringResource(
                         R.string.agent_stats,
@@ -269,16 +281,27 @@ private fun AgentSettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = stringResource(R.string.settings_compact),
+                        text = stringResource(R.string.settings_json),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Switch(
-                        checked = settings.compactContext,
-                        onCheckedChange = { onChange(settings.copy(compactContext = it)) }
+                        checked = settings.jsonFormat,
+                        onCheckedChange = { onChange(settings.copy(jsonFormat = it)) }
                     )
                 }
 
-                if (settings.compactContext) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.settings_strategy),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    StrategyDropdown(
+                        selected = settings.strategy,
+                        onSelect = { onChange(settings.copy(strategy = it)) }
+                    )
+                }
+
+                if (settings.strategy != ContextStrategy.BRANCHING) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             text = stringResource(R.string.settings_window, settings.historyWindow),
@@ -306,6 +329,37 @@ private fun AgentSettingsDialog(
 }
 
 @Composable
+private fun StrategyDropdown(
+    selected: ContextStrategy,
+    onSelect: (ContextStrategy) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text(selected.label(), maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ContextStrategy.values().forEach { strategy ->
+                DropdownMenuItem(
+                    text = { Text(strategy.label()) },
+                    onClick = {
+                        onSelect(strategy)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+private fun ContextStrategy.label(): String = when (this) {
+    ContextStrategy.SLIDING_WINDOW -> "Скользящее окно"
+    ContextStrategy.FACTS -> "Факты (ключ-значение)"
+    ContextStrategy.BRANCHING -> "Ветки диалога"
+    ContextStrategy.SUMMARY -> "Резюме (сжатие)"
+}
+
+@Composable
 private fun ModelDropdown(
     selected: String,
     models: List<String>,
@@ -326,6 +380,45 @@ private fun ModelDropdown(
                     }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun BranchControls(
+    branches: List<String>,
+    active: String,
+    onSwitch: (String) -> Unit,
+    onCheckpoint: () -> Unit,
+    onFork: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box {
+            OutlinedButton(onClick = { expanded = true }) {
+                Text("ветка: $active", maxLines = 1)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                branches.forEach { name ->
+                    DropdownMenuItem(
+                        text = { Text(name, maxLines = 1) },
+                        onClick = {
+                            onSwitch(name)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+        OutlinedButton(onClick = onCheckpoint) {
+            Text(stringResource(R.string.branch_checkpoint))
+        }
+        OutlinedButton(onClick = onFork) {
+            Text(stringResource(R.string.branch_fork))
         }
     }
 }

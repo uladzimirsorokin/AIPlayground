@@ -11,6 +11,7 @@ import com.example.aiadventchallenge.data.KeyStorage
 import com.example.aiadventchallenge.data.LlmClient
 import com.example.aiadventchallenge.data.agent.AgentStats
 import com.example.aiadventchallenge.data.agent.ChatAgent
+import com.example.aiadventchallenge.data.agent.ContextStrategy
 import com.example.aiadventchallenge.data.agent.DatabaseHistoryStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +23,7 @@ data class AgentSettings(
     val temperature: Float,
     val model: String,
     val jsonFormat: Boolean,
-    val compactContext: Boolean,
+    val strategy: ContextStrategy,
     val historyWindow: Int
 )
 
@@ -49,7 +50,9 @@ class AgentViewModel(
             model = prefs.getString("agent_model", BuildConfig.LLM_MODEL)
                 ?: BuildConfig.LLM_MODEL,
             jsonFormat = prefs.getBoolean("agent_json_format", false),
-            compactContext = prefs.getBoolean("agent_compact_context", true),
+            strategy = runCatching {
+                ContextStrategy.valueOf(prefs.getString("agent_strategy", null) ?: "")
+            }.getOrDefault(ContextStrategy.SUMMARY),
             historyWindow = prefs.getInt("agent_history_window", 10)
         )
     )
@@ -64,7 +67,7 @@ class AgentViewModel(
         model = { _settings.value.model },
         temperature = { _settings.value.temperature.toDouble() },
         jsonFormat = { _settings.value.jsonFormat },
-        compactContext = { _settings.value.compactContext },
+        strategy = { _settings.value.strategy },
         historyWindow = { _settings.value.historyWindow },
         historyStore = historyStore
     )
@@ -87,6 +90,39 @@ class AgentViewModel(
     val historyTokens: StateFlow<Int> = _historyTokens.asStateFlow()
 
     val summaryLength: Int get() = agent.summaryText.length
+    val factsLength: Int get() = agent.factsText.length
+
+    private val _branchNames = MutableStateFlow(agent.branchNames)
+    val branchNames: StateFlow<List<String>> = _branchNames.asStateFlow()
+
+    private val _activeBranch = MutableStateFlow(agent.activeBranch)
+    val activeBranch: StateFlow<String> = _activeBranch.asStateFlow()
+
+    fun saveCheckpoint() {
+        agent.saveCheckpoint()
+        _branchNames.value = agent.branchNames
+    }
+
+    fun forkFromCheckpoint() {
+        agent.forkFromCheckpoint()
+        _branchNames.value = agent.branchNames
+        _activeBranch.value = agent.activeBranch
+        reloadMessages()
+    }
+
+    fun switchBranch(name: String) {
+        agent.switchBranch(name)
+        _activeBranch.value = agent.activeBranch
+        reloadMessages()
+    }
+
+    private fun reloadMessages() {
+        _messages.value = agent.history.toList()
+        _historyTokens.value = agent.historyEstimateTokens
+        _hasSavedContext.value = false
+        _canRetry.value = false
+        pendingText = null
+    }
 
     private var pendingText: String? = null
 
@@ -152,7 +188,7 @@ class AgentViewModel(
             .putFloat("agent_temperature", new.temperature)
             .putString("agent_model", new.model)
             .putBoolean("agent_json_format", new.jsonFormat)
-            .putBoolean("agent_compact_context", new.compactContext)
+            .putString("agent_strategy", new.strategy.name)
             .putInt("agent_history_window", new.historyWindow)
             .apply()
         _settings.value = new
@@ -166,6 +202,8 @@ class AgentViewModel(
         _canRetry.value = false
         _historyTokens.value = 0
         pendingText = null
+        _branchNames.value = agent.branchNames
+        _activeBranch.value = agent.activeBranch
     }
 }
 

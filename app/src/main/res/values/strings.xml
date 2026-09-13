@@ -71,6 +71,9 @@
     <string name="settings_model">Модель</string>
     <string name="settings_json">JSON-формат ответа</string>
     <string name="settings_compact">Сжатие контекста при переполнении</string>
+    <string name="settings_strategy">Стратегия контекста</string>
+    <string name="branch_checkpoint">Точка</string>
+    <string name="branch_fork">Ветка от точки</string>
     <string name="settings_window">Сообщений до сжатия: %1$d</string>
     <string name="settings_window_desc">Последние N сообщений хранятся как есть, старшие сворачиваются в summary.</string>
 </resources>

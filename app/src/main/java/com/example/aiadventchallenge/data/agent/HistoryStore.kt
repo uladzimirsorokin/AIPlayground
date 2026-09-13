@@ -11,6 +11,8 @@ interface HistoryStore {
     fun clear()
     fun loadSummary(): String
     fun saveSummary(summary: String)
+    fun loadFacts(): String
+    fun saveFacts(facts: String)
 }
 
 /**
@@ -50,7 +52,13 @@ class JsonHistoryStore(context: Context) : HistoryStore {
         prefs.edit().putString("summary", summary).apply()
     }
 
+    override fun loadFacts(): String = prefs.getString("facts", "") ?: ""
+
+    override fun saveFacts(facts: String) {
+        prefs.edit().putString("facts", facts).apply()
+    }
+
     override fun clear() {
-        prefs.edit().remove("messages").remove("summary").apply()
+        prefs.edit().remove("messages").remove("summary").remove("facts").apply()
     }
 }

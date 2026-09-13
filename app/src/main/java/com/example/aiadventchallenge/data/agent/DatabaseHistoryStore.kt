@@ -56,9 +56,15 @@ class DatabaseHistoryStore(context: Context) : HistoryStore {
         summaryPrefs.edit().putString("summary", summary).apply()
     }
 
+    override fun loadFacts(): String = summaryPrefs.getString("facts", "") ?: ""
+
+    override fun saveFacts(facts: String) {
+        summaryPrefs.edit().putString("facts", facts).apply()
+    }
+
     override fun clear() {
         helper.writableDatabase.delete(TABLE, null, null)
-        summaryPrefs.edit().remove("summary").apply()
+        summaryPrefs.edit().remove("summary").remove("facts").apply()
     }
 
     private class HistoryDbHelper(context: Context) :
