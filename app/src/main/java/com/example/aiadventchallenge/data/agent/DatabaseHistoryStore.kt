@@ -7,13 +7,12 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.example.aiadventchallenge.data.ChatMessage
 
 /**
- * Persists the agent's conversation history in a local SQLite database,
- * so the dialogue survives app restarts.
+ * Краткосрочная память (сообщения диалога) в локальной SQLite.
+ * Скоуп по id агента: файл БД agent_history_<scope>.db — у каждого агента своя история.
  */
-class DatabaseHistoryStore(context: Context) : HistoryStore {
+class DatabaseHistoryStore(context: Context, scope: String) : HistoryStore {
 
-    private val helper = HistoryDbHelper(context)
-    private val summaryPrefs = context.getSharedPreferences("agent_history", Context.MODE_PRIVATE)
+    private val helper = HistoryDbHelper(context, scope)
 
     override fun load(): List<ChatMessage> {
         val db = helper.readableDatabase
@@ -50,25 +49,12 @@ class DatabaseHistoryStore(context: Context) : HistoryStore {
         }
     }
 
-    override fun loadSummary(): String = summaryPrefs.getString("summary", "") ?: ""
-
-    override fun saveSummary(summary: String) {
-        summaryPrefs.edit().putString("summary", summary).apply()
-    }
-
-    override fun loadFacts(): String = summaryPrefs.getString("facts", "") ?: ""
-
-    override fun saveFacts(facts: String) {
-        summaryPrefs.edit().putString("facts", facts).apply()
-    }
-
     override fun clear() {
         helper.writableDatabase.delete(TABLE, null, null)
-        summaryPrefs.edit().remove("summary").remove("facts").apply()
     }
 
-    private class HistoryDbHelper(context: Context) :
-        SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
+    private class HistoryDbHelper(context: Context, scope: String) :
+        SQLiteOpenHelper(context, "${DB_NAME_PREFIX}_${scope}.db", null, DB_VERSION) {
 
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL(
@@ -86,7 +72,7 @@ class DatabaseHistoryStore(context: Context) : HistoryStore {
     }
 
     private companion object {
-        const val DB_NAME = "agent_history.db"
+        const val DB_NAME_PREFIX = "agent_history"
         const val DB_VERSION = 1
         const val TABLE = "messages"
         const val COL_ID = "id"

@@ -9,13 +9,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material3.AlertDialog
@@ -53,6 +57,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.agent.ContextStrategy
+import com.example.aiadventchallenge.data.agent.LongTermCategory
+import com.example.aiadventchallenge.data.agent.LongTermEntry
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -70,8 +76,11 @@ fun AgentScreen(
     val hasSavedContext by viewModel.hasSavedContext.collectAsState()
     val branchNames by viewModel.branchNames.collectAsState()
     val activeBranch by viewModel.activeBranch.collectAsState()
+    val longTerm by viewModel.longTerm.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showLongTerm by rememberSaveable { mutableStateOf(false) }
+    var showSystemPrompt by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     Scaffold(
@@ -136,6 +145,17 @@ fun AgentScreen(
                         stats.compactions,
                         stats.savedTokens,
                         viewModel.summaryLength
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                Text(
+                    text = stringResource(
+                        R.string.agent_stats_memory,
+                        viewModel.historySize,
+                        viewModel.workingChars,
+                        viewModel.longTermCount
                     ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -211,7 +231,26 @@ fun AgentScreen(
             settings = settings,
             models = viewModel.availableModels,
             onDismiss = { showSettings = false },
-            onChange = { newSettings -> viewModel.updateSettings { newSettings } }
+            onChange = { newSettings -> viewModel.updateSettings { newSettings } },
+            onOpenSystemPrompt = { showSettings = false; showSystemPrompt = true },
+            onOpenLongTerm = { showSettings = false; showLongTerm = true }
+        )
+    }
+
+    if (showSystemPrompt) {
+        SystemPromptPreviewDialog(
+            prompt = viewModel.effectiveSystemPrompt,
+            onDismiss = { showSystemPrompt = false }
+        )
+    }
+
+    if (showLongTerm) {
+        LongTermMemoryDialog(
+            entries = longTerm,
+            onAdd = viewModel::addLongTerm,
+            onRemove = viewModel::removeLongTerm,
+            onClear = viewModel::clearLongTerm,
+            onDismiss = { showLongTerm = false }
         )
     }
 }
@@ -221,13 +260,18 @@ private fun AgentSettingsDialog(
     settings: AgentSettings,
     models: List<String>,
     onDismiss: () -> Unit,
-    onChange: (AgentSettings) -> Unit
+    onChange: (AgentSettings) -> Unit,
+    onOpenSystemPrompt: () -> Unit,
+    onOpenLongTerm: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.settings_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 OutlinedTextField(
                     value = settings.systemPrompt,
                     onValueChange = { onChange(settings.copy(systemPrompt = it)) },
@@ -235,6 +279,19 @@ private fun AgentSettingsDialog(
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2
                 )
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedTextField(
+                        value = settings.team,
+                        onValueChange = { onChange(settings.copy(team = it)) },
+                        label = { Text(stringResource(R.string.settings_team)) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_team_desc),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
 
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
@@ -275,19 +332,43 @@ private fun AgentSettingsDialog(
                     )
                 }
 
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_longterm),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                            checked = settings.longTerm,
+                            onCheckedChange = { onChange(settings.copy(longTerm = it)) }
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.settings_longterm_desc),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = stringResource(R.string.settings_json),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Switch(
-                        checked = settings.jsonFormat,
-                        onCheckedChange = { onChange(settings.copy(jsonFormat = it)) }
-                    )
+                    OutlinedButton(
+                        onClick = onOpenSystemPrompt,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(stringResource(R.string.settings_show_sysprompt))
+                    }
+                    OutlinedButton(
+                        onClick = onOpenLongTerm,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(stringResource(R.string.settings_manage_longterm))
+                    }
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -357,6 +438,169 @@ private fun ContextStrategy.label(): String = when (this) {
     ContextStrategy.FACTS -> "Факты (ключ-значение)"
     ContextStrategy.BRANCHING -> "Ветки диалога"
     ContextStrategy.SUMMARY -> "Резюме (сжатие)"
+}
+
+@Composable
+private fun SystemPromptPreviewDialog(
+    prompt: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.sysprompt_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = stringResource(R.string.sysprompt_desc),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp)
+                ) {
+                    Text(
+                        text = prompt.ifBlank { stringResource(R.string.sysprompt_empty) },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .verticalScroll(rememberScrollState())
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.settings_done))
+            }
+        }
+    )
+}
+
+@Composable
+private fun LongTermMemoryDialog(
+    entries: List<LongTermEntry>,
+    onAdd: (LongTermCategory, String) -> Unit,
+    onRemove: (Long) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var category by remember { mutableStateOf(LongTermCategory.PROFILE) }
+    var content by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.longterm_title)) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.longterm_hint),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (entries.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.longterm_empty),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        entries.forEach { entry ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "[${entry.category.name.lowercase()}] ${entry.content}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { onRemove(entry.id) }) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = stringResource(R.string.longterm_remove)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    LongTermCategoryDropdown(
+                        selected = category,
+                        onSelect = { category = it }
+                    )
+                    OutlinedTextField(
+                        value = content,
+                        onValueChange = { content = it },
+                        label = { Text(stringResource(R.string.longterm_add_hint)) },
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2
+                    )
+                }
+                Button(
+                    onClick = {
+                        if (content.isNotBlank()) {
+                            onAdd(category, content.trim())
+                            content = ""
+                        }
+                    },
+                    enabled = content.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.longterm_add))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.settings_done))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onClear) {
+                Text(stringResource(R.string.longterm_clear))
+            }
+        }
+    )
+}
+
+@Composable
+private fun LongTermCategoryDropdown(
+    selected: LongTermCategory,
+    onSelect: (LongTermCategory) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text(selected.label(), maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            LongTermCategory.values().forEach { category ->
+                DropdownMenuItem(
+                    text = { Text(category.label()) },
+                    onClick = {
+                        onSelect(category)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+private fun LongTermCategory.label(): String = when (this) {
+    LongTermCategory.PROFILE -> "Профиль"
+    LongTermCategory.DECISION -> "Решение"
+    LongTermCategory.KNOWLEDGE -> "Знание"
 }
 
 @Composable

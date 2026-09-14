@@ -13,6 +13,10 @@ import com.example.aiadventchallenge.data.agent.AgentStats
 import com.example.aiadventchallenge.data.agent.ChatAgent
 import com.example.aiadventchallenge.data.agent.ContextStrategy
 import com.example.aiadventchallenge.data.agent.DatabaseHistoryStore
+import com.example.aiadventchallenge.data.agent.LongTermCategory
+import com.example.aiadventchallenge.data.agent.LongTermEntry
+import com.example.aiadventchallenge.data.agent.PrefsWorkingStore
+import com.example.aiadventchallenge.data.agent.SqliteLongTermStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,12 +28,18 @@ data class AgentSettings(
     val model: String,
     val jsonFormat: Boolean,
     val strategy: ContextStrategy,
-    val historyWindow: Int
+    val historyWindow: Int,
+    val longTerm: Boolean,
+    val team: String
 )
 
 class AgentViewModel(
     application: Application
 ) : AndroidViewModel(application) {
+
+    private companion object {
+        const val AGENT_ID = "main"
+    }
 
     private val prefs =
         getApplication<Application>().getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -53,12 +63,17 @@ class AgentViewModel(
             strategy = runCatching {
                 ContextStrategy.valueOf(prefs.getString("agent_strategy", null) ?: "")
             }.getOrDefault(ContextStrategy.SUMMARY),
-            historyWindow = prefs.getInt("agent_history_window", 10)
+            historyWindow = prefs.getInt("agent_history_window", 10),
+            longTerm = prefs.getBoolean("agent_longterm", true),
+            team = prefs.getString("agent_team", "main") ?: "main"
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
 
-    private val historyStore = DatabaseHistoryStore(getApplication())
+    // Краткосрочная — своя на агента; рабочая — общая на команду; долговременная — глобальная.
+    private val shortTermStore = DatabaseHistoryStore(getApplication(), AGENT_ID)
+    private val workingStore = PrefsWorkingStore(getApplication()) { _settings.value.team }
+    private val longTermStore = SqliteLongTermStore(getApplication())
 
     private val agent = ChatAgent(
         client = LlmClient(),
@@ -69,14 +84,18 @@ class AgentViewModel(
         jsonFormat = { _settings.value.jsonFormat },
         strategy = { _settings.value.strategy },
         historyWindow = { _settings.value.historyWindow },
-        historyStore = historyStore
+        shortTermStore = shortTermStore,
+        workingStore = workingStore,
+        longTermStore = longTermStore,
+        longTermEnabled = { _settings.value.longTerm }
     )
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     private val _hasSavedContext = MutableStateFlow(
-        historyStore.load().isNotEmpty() || historyStore.loadSummary().isNotEmpty()
+        shortTermStore.load().isNotEmpty() || workingStore.loadSummary().isNotEmpty() ||
+            longTermStore.load().isNotEmpty()
     )
     val hasSavedContext: StateFlow<Boolean> = _hasSavedContext.asStateFlow()
 
@@ -91,6 +110,44 @@ class AgentViewModel(
 
     val summaryLength: Int get() = agent.summaryText.length
     val factsLength: Int get() = agent.factsText.length
+    val historySize: Int get() = agent.history.size
+    val workingChars: Int get() = agent.summaryText.length + agent.factsText.length
+    val longTermCount: Int get() = agent.longTermCount
+
+    private val _longTerm = MutableStateFlow(agent.longTermEntries)
+    val longTerm: StateFlow<List<LongTermEntry>> = _longTerm.asStateFlow()
+
+    fun addLongTerm(category: LongTermCategory, content: String) {
+        agent.addLongTermEntry(category, content)
+        _longTerm.value = agent.longTermEntries
+    }
+
+    fun removeLongTerm(id: Long) {
+        agent.removeLongTermEntry(id)
+        _longTerm.value = agent.longTermEntries
+    }
+
+    fun clearLongTerm() {
+        agent.clearLongTerm()
+        _longTerm.value = agent.longTermEntries
+    }
+
+    /** Юзерский system prompt + всё, что агент подмешивает из памяти (итоговый промпт). */
+    val effectiveSystemPrompt: String
+        get() = buildString {
+            append(_settings.value.systemPrompt)
+            if (_settings.value.longTerm) {
+                agent.longTermText.takeIf { it.isNotBlank() }?.let {
+                    append("\n\nДолговременная память:\n").append(it)
+                }
+            }
+            agent.summaryText.takeIf { it.isNotBlank() }?.let {
+                append("\n\nРезюме диалога (рабочая память):\n").append(it)
+            }
+            agent.factsText.takeIf { it.isNotBlank() }?.let {
+                append("\n\nФакты о диалоге (рабочая память):\n").append(it)
+            }
+        }
 
     private val _branchNames = MutableStateFlow(agent.branchNames)
     val branchNames: StateFlow<List<String>> = _branchNames.asStateFlow()
@@ -166,6 +223,7 @@ class AgentViewModel(
                     truncated = response.truncated
                 )
                 _stats.value = response.stats
+                _longTerm.value = agent.longTermEntries
             } catch (e: Exception) {
                 Log.e("AGENT", "Agent failed", e)
                 _messages.value =
@@ -183,6 +241,7 @@ class AgentViewModel(
 
     fun updateSettings(transform: (AgentSettings) -> AgentSettings) {
         val new = transform(_settings.value)
+        val teamChanged = new.team != _settings.value.team
         prefs.edit()
             .putString("system_prompt", new.systemPrompt)
             .putFloat("agent_temperature", new.temperature)
@@ -190,8 +249,12 @@ class AgentViewModel(
             .putBoolean("agent_json_format", new.jsonFormat)
             .putString("agent_strategy", new.strategy.name)
             .putInt("agent_history_window", new.historyWindow)
+            .putBoolean("agent_longterm", new.longTerm)
+            .putString("agent_team", new.team)
             .apply()
         _settings.value = new
+        // Смена команды = смена скоупа рабочей памяти: перечитываем её из стора новой команды.
+        if (teamChanged) agent.reloadWorkingMemory()
     }
 
     fun clearChat() {
@@ -204,6 +267,7 @@ class AgentViewModel(
         pendingText = null
         _branchNames.value = agent.branchNames
         _activeBranch.value = agent.activeBranch
+        _longTerm.value = agent.longTermEntries
     }
 }
 

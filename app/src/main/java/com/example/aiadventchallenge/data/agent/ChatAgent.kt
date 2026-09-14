@@ -6,8 +6,16 @@ import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.LlmClient
 
 /**
- * Conversational agent with pluggable context-management strategies:
+ * Conversational agent with pluggable context-management strategies and an explicit
+ * three-layer memory model (День 11):
  *
+ * - SHORT_TERM: the current dialogue (active branch), isolated per agent (HistoryStore scoped by agent id).
+ * - WORKING: current-task data (rolling summary / facts), SHARED per team — every agent of the
+ *   same team reads/writes the same summary and facts (WorkingStore scoped by team id).
+ * - LONG_TERM: profile, decisions and knowledge, extracted by an explicit LLM call and
+ *   stored in a global LongTermStore; injected into every request as a system message.
+ *
+ * Strategies:
  * - SLIDING_WINDOW: only the last N messages are sent, the rest is dropped from the request.
  * - FACTS: a key-value "facts" block is updated after every user message (an extra LLM call)
  *   and sent together with the last N messages.
@@ -28,7 +36,10 @@ class ChatAgent(
     private val jsonFormat: () -> Boolean,
     private val strategy: () -> ContextStrategy,
     private val historyWindow: () -> Int,
-    private val historyStore: HistoryStore,
+    private val shortTermStore: HistoryStore,
+    private val workingStore: WorkingStore,
+    private val longTermStore: LongTermStore,
+    private val longTermEnabled: () -> Boolean,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
@@ -46,14 +57,58 @@ class ChatAgent(
         const val KEEP_RECENT = 6
     }
 
-    private var _history = mutableListOf<ChatMessage>().apply { addAll(historyStore.load()) }
+    // Явная трёхслойная модель памяти.
+    private val memory = AgentMemory(
+        client = client,
+        model = model,
+        longTermEnabled = longTermEnabled,
+        longTermStore = longTermStore
+    )
+
+    // Краткосрочный слой = активная ветка диалога; ветки — живые списки.
+    private var _history: MutableList<ChatMessage>
+        get() = memory.shortTerm
+        set(value) {
+            memory.shortTerm = value
+        }
+
+    init {
+        _history.addAll(shortTermStore.load())
+        memory.summary = workingStore.loadSummary()
+        memory.facts = workingStore.loadFacts()
+    }
+
     override val history: List<ChatMessage> get() = _history.toList()
 
-    private var summary = historyStore.loadSummary()
-    val summaryText: String get() = summary
+    val summaryText: String get() = memory.summary
 
-    private var facts = historyStore.loadFacts()
-    val factsText: String get() = facts
+    val factsText: String get() = memory.facts
+
+    val longTermCount: Int get() = memory.longTermCount
+
+    val longTermText: String get() = memory.longTermText
+
+    val longTermEntries: List<LongTermEntry> get() = memory.longTerm.toList()
+
+    /** Принудительное добавление записи в долговременный слой (вручную). */
+    fun addLongTermEntry(category: LongTermCategory, content: String) {
+        memory.addManual(category, content)
+    }
+
+    fun removeLongTermEntry(id: Long) {
+        memory.remove(id)
+    }
+
+    fun clearLongTerm() {
+        memory.clearLongTerm()
+    }
+
+    /** Перечитывает рабочую память из стора — нужно при смене команды (скоупа). */
+    fun reloadWorkingMemory() {
+        memory.summary = workingStore.loadSummary()
+        memory.facts = workingStore.loadFacts()
+        Log.d("AGENT", "memory: working reloaded ${memory.info}")
+    }
 
     // Each branch is a live MutableList; the active branch is the same object as _history,
     // so messages added while a branch is active are preserved when switching.
@@ -83,8 +138,7 @@ class ChatAgent(
         val window = historyWindow()
         Log.d(
             "AGENT",
-            "send: history=${_history.size}msgs chars=${_history.sumOf { it.content.length }} " +
-                "summary=${summary.length} facts=${facts.length} branch=$activeBranchName " +
+            "send: layers=${memory.info} branch=$activeBranchName " +
                 "strategy=$strat window=$window limit=$contextLimit est=${estimate(_history)}"
         )
 
@@ -102,18 +156,22 @@ class ChatAgent(
         _history.add(ChatMessage("user", content))
 
         if (strat == ContextStrategy.FACTS) {
-            facts = updateFacts(key, facts, userMessage)
-            historyStore.saveFacts(facts)
+            memory.facts = updateFacts(key, memory.facts, userMessage)
+            workingStore.saveFacts(memory.facts)
         }
 
         val messages = buildList {
             systemPrompt().takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+            // Долговременный слой подмешивается в каждый запрос независимо от стратегии.
+            memory.longTermText.takeIf { it.isNotBlank() && longTermEnabled() }?.let {
+                add(ChatMessage("system", "Долговременная память:\n$it"))
+            }
             when (strat) {
                 ContextStrategy.SLIDING_WINDOW ->
                     _history.takeLast(window).forEach { add(it) }
 
                 ContextStrategy.FACTS -> {
-                    facts.takeIf { it.isNotBlank() }?.let {
+                    memory.facts.takeIf { it.isNotBlank() }?.let {
                         add(ChatMessage("system", "Факты о диалоге:\n$it"))
                     }
                     _history.takeLast(window).forEach { add(it) }
@@ -123,7 +181,7 @@ class ChatAgent(
                     _history.forEach { add(it) }
 
                 ContextStrategy.SUMMARY -> {
-                    summary.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", summary)) }
+                    memory.summary.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
                     _history.takeLast(window).forEach { add(it) }
                 }
             }
@@ -148,13 +206,15 @@ class ChatAgent(
             result.promptTokens < (sentChars / 3.0) * 0.6
 
         _history.add(ChatMessage("assistant", result.content))
-        historyStore.save(_history)
-        historyStore.saveSummary(summary)
+        shortTermStore.save(_history)
+        workingStore.saveSummary(memory.summary)
+        memory.consolidate(key, userMessage, result.content)
         Log.d(
             "AGENT",
             "done: model=${result.model} in=${result.promptTokens} out=${result.completionTokens} " +
                 "total=${result.totalTokens} cost=${result.costUsd} history=${_history.size}msgs " +
-                "summary=${summary.length} sentEst=${estimate(messages)} fullEst=${estimate(_history)} " +
+                "summary=${memory.summary.length} layers=${memory.info} " +
+                "sentEst=${estimate(messages)} fullEst=${estimate(_history)} " +
                 "saved=${stats.savedTokens} compactions=${stats.compactions} requests=${stats.requests} " +
                 "compacted=$compacted truncated=$truncated"
         )
@@ -183,10 +243,9 @@ class ChatAgent(
     }
 
     override fun clearHistory() {
-        _history = mutableListOf()
-        summary = ""
-        facts = ""
-        historyStore.clear()
+        memory.clear()
+        shortTermStore.clear()
+        workingStore.clear()
         stats = AgentStats()
         compactCount = 0
         savedTokens = 0L
@@ -206,14 +265,14 @@ class ChatAgent(
         branches[newName] = fork
         _history = fork
         activeBranchName = newName
-        historyStore.save(_history)
+        shortTermStore.save(_history)
     }
 
     fun switchBranch(name: String) {
         val target = branches[name] ?: return
         _history = target
         activeBranchName = name
-        historyStore.save(_history)
+        shortTermStore.save(_history)
     }
 
     private suspend fun updateFacts(key: String, current: String, message: String): String = try {
@@ -240,7 +299,7 @@ class ChatAgent(
         if (old.isEmpty()) return
 
         val merged = buildList {
-            summary.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", summary)) }
+            memory.summary.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             addAll(old)
         }
         val newSummary = try {
@@ -253,16 +312,16 @@ class ChatAgent(
                 model = model()
             ).content.trim()
         } catch (e: Exception) {
-            summary
+            memory.summary
         }
-        if (newSummary.isNotBlank()) summary = newSummary
+        if (newSummary.isNotBlank()) memory.summary = newSummary
         compactCount++
-        Log.d("AGENT", "fold: folded=${old.size}msgs summary=${summary.length}")
-        historyStore.saveSummary(summary)
+        Log.d("AGENT", "fold: folded=${old.size}msgs summary=${memory.summary.length}")
+        workingStore.saveSummary(memory.summary)
     }
 
     private suspend fun ensureFits(key: String): Boolean {
-        if (estimate(_history.takeLast(KEEP_RECENT)) + summary.length / 3 <= contextLimit) return false
+        if (estimate(_history.takeLast(KEEP_RECENT)) + memory.summary.length / 3 <= contextLimit) return false
         if (_history.size > KEEP_RECENT) foldIntoSummary(key, keep = KEEP_RECENT)
         return true
     }
