@@ -12,6 +12,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.aiadventchallenge.ui.agent.AgentScreen
+import com.example.aiadventchallenge.ui.agent.ProfileScreen
 import com.example.aiadventchallenge.ui.home.HomeScreen
 import com.example.aiadventchallenge.ui.theme.AIAdventChallengeTheme
 
@@ -31,7 +32,13 @@ class MainActivity : ComponentActivity() {
                             HomeScreen(onOpenAgent = { navController.navigate("agent") })
                         }
                         composable("agent") {
-                            AgentScreen(onBack = { navController.popBackStack() })
+                            AgentScreen(
+                                onBack = { navController.popBackStack() },
+                                onOpenProfile = { navController.navigate("profile") }
+                            )
+                        }
+                        composable("profile") {
+                            ProfileScreen(onBack = { navController.popBackStack() })
                         }
                     }
                 }

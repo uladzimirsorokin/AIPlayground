@@ -15,8 +15,11 @@ import com.example.aiadventchallenge.data.agent.ContextStrategy
 import com.example.aiadventchallenge.data.agent.DatabaseHistoryStore
 import com.example.aiadventchallenge.data.agent.LongTermCategory
 import com.example.aiadventchallenge.data.agent.LongTermEntry
+import com.example.aiadventchallenge.data.agent.PrefsProfileStore
 import com.example.aiadventchallenge.data.agent.PrefsWorkingStore
+import com.example.aiadventchallenge.data.agent.SavedProfile
 import com.example.aiadventchallenge.data.agent.SqliteLongTermStore
+import com.example.aiadventchallenge.data.agent.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -74,6 +77,7 @@ class AgentViewModel(
     private val shortTermStore = DatabaseHistoryStore(getApplication(), AGENT_ID)
     private val workingStore = PrefsWorkingStore(getApplication()) { _settings.value.team }
     private val longTermStore = SqliteLongTermStore(getApplication())
+    private val profileStore = PrefsProfileStore(getApplication())
 
     private val agent = ChatAgent(
         client = LlmClient(),
@@ -87,7 +91,8 @@ class AgentViewModel(
         shortTermStore = shortTermStore,
         workingStore = workingStore,
         longTermStore = longTermStore,
-        longTermEnabled = { _settings.value.longTerm }
+        longTermEnabled = { _settings.value.longTerm },
+        profileStore = profileStore
     )
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -132,10 +137,74 @@ class AgentViewModel(
         _longTerm.value = agent.longTermEntries
     }
 
+    private val _profile = MutableStateFlow(agent.currentProfile)
+    val profile: StateFlow<UserProfile> = _profile.asStateFlow()
+
+    private val _savedProfiles = MutableStateFlow(agent.savedProfiles)
+    val savedProfiles: StateFlow<List<SavedProfile>> = _savedProfiles.asStateFlow()
+
+    private val _activeProfileId = MutableStateFlow(agent.activeProfileId)
+    val activeProfileId: StateFlow<String?> = _activeProfileId.asStateFlow()
+
+    private val _buildingProfile = MutableStateFlow(false)
+    val buildingProfile: StateFlow<Boolean> = _buildingProfile.asStateFlow()
+
+    fun createProfile(label: String) {
+        agent.createProfile(label)
+        _profile.value = agent.currentProfile
+        _savedProfiles.value = agent.savedProfiles
+        _activeProfileId.value = agent.activeProfileId
+    }
+
+    fun selectProfile(id: String) {
+        agent.selectProfile(id)
+        _profile.value = agent.currentProfile
+        _savedProfiles.value = agent.savedProfiles
+        _activeProfileId.value = agent.activeProfileId
+    }
+
+    fun updateProfile(new: UserProfile, label: String) {
+        agent.updateProfile(new, label)
+        _profile.value = new
+        _savedProfiles.value = agent.savedProfiles
+    }
+
+    fun deleteProfile(id: String) {
+        agent.deleteProfile(id)
+        _profile.value = agent.currentProfile
+        _savedProfiles.value = agent.savedProfiles
+        _activeProfileId.value = agent.activeProfileId
+    }
+
+    fun clearProfile() {
+        agent.clearProfile()
+        _profile.value = agent.currentProfile
+        _savedProfiles.value = agent.savedProfiles
+    }
+
+    fun buildProfile() {
+        if (_buildingProfile.value) return
+        _buildingProfile.value = true
+        viewModelScope.launch {
+            try {
+                val built = agent.buildProfileFromConversation()
+                _profile.value = built
+                _savedProfiles.value = agent.savedProfiles
+            } catch (e: Exception) {
+                Log.e("AGENT", "Profile build failed", e)
+            } finally {
+                _buildingProfile.value = false
+            }
+        }
+    }
+
     /** Юзерский system prompt + всё, что агент подмешивает из памяти (итоговый промпт). */
     val effectiveSystemPrompt: String
         get() = buildString {
             append(_settings.value.systemPrompt)
+            agent.currentProfile.text.takeIf { it.isNotBlank() }?.let {
+                append("\n\n").append(it)
+            }
             if (_settings.value.longTerm) {
                 agent.longTermText.takeIf { it.isNotBlank() }?.let {
                     append("\n\nДолговременная память:\n").append(it)

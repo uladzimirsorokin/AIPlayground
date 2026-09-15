@@ -1,5 +1,6 @@
 package com.example.aiadventchallenge.ui.agent
 
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -65,8 +67,11 @@ import kotlin.math.roundToInt
 @Composable
 fun AgentScreen(
     onBack: () -> Unit,
-    viewModel: AgentViewModel = viewModel()
+    onOpenProfile: () -> Unit
 ) {
+    // Общий с экраном профиля ViewModel (скоуп на Activity), чтобы профиль применялся к агенту.
+    val viewModel: AgentViewModel =
+        viewModel(viewModelStoreOwner = LocalContext.current as ComponentActivity)
     val messages by viewModel.messages.collectAsState()
     val sending by viewModel.sending.collectAsState()
     val settings by viewModel.settings.collectAsState()
@@ -233,7 +238,8 @@ fun AgentScreen(
             onDismiss = { showSettings = false },
             onChange = { newSettings -> viewModel.updateSettings { newSettings } },
             onOpenSystemPrompt = { showSettings = false; showSystemPrompt = true },
-            onOpenLongTerm = { showSettings = false; showLongTerm = true }
+            onOpenLongTerm = { showSettings = false; showLongTerm = true },
+            onOpenProfile = { showSettings = false; onOpenProfile() }
         )
     }
 
@@ -262,141 +268,171 @@ private fun AgentSettingsDialog(
     onDismiss: () -> Unit,
     onChange: (AgentSettings) -> Unit,
     onOpenSystemPrompt: () -> Unit,
-    onOpenLongTerm: () -> Unit
+    onOpenLongTerm: () -> Unit,
+    onOpenProfile: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.settings_title)) },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
-                    value = settings.systemPrompt,
-                    onValueChange = { onChange(settings.copy(systemPrompt = it)) },
-                    label = { Text(stringResource(R.string.settings_system_prompt)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2
-                )
-
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                item {
                     OutlinedTextField(
-                        value = settings.team,
-                        onValueChange = { onChange(settings.copy(team = it)) },
-                        label = { Text(stringResource(R.string.settings_team)) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = stringResource(R.string.settings_team_desc),
-                        style = MaterialTheme.typography.bodySmall
+                        value = settings.systemPrompt,
+                        onValueChange = { onChange(settings.copy(systemPrompt = it)) },
+                        label = { Text(stringResource(R.string.settings_system_prompt)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
                     )
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = stringResource(R.string.settings_temperature, settings.temperature),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Slider(
-                        value = settings.temperature,
-                        onValueChange = { onChange(settings.copy(temperature = it)) },
-                        valueRange = 0f..2f
-                    )
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedTextField(
+                            value = settings.team,
+                            onValueChange = { onChange(settings.copy(team = it)) },
+                            label = { Text(stringResource(R.string.settings_team)) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_team_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = stringResource(R.string.settings_model),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    ModelDropdown(
-                        selected = settings.model,
-                        models = models,
-                        onSelect = { onChange(settings.copy(model = it)) }
-                    )
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_temperature, settings.temperature),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Slider(
+                            value = settings.temperature,
+                            onValueChange = { onChange(settings.copy(temperature = it)) },
+                            valueRange = 0f..2f
+                        )
+                    }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = stringResource(R.string.settings_json),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Switch(
-                        checked = settings.jsonFormat,
-                        onCheckedChange = { onChange(settings.copy(jsonFormat = it)) }
-                    )
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_model),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        ModelDropdown(
+                            selected = settings.model,
+                            models = models,
+                            onSelect = { onChange(settings.copy(model = it)) }
+                        )
+                    }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = stringResource(R.string.settings_longterm),
+                            text = stringResource(R.string.settings_json),
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Switch(
-                            checked = settings.longTerm,
-                            onCheckedChange = { onChange(settings.copy(longTerm = it)) }
+                            checked = settings.jsonFormat,
+                            onCheckedChange = { onChange(settings.copy(jsonFormat = it)) }
                         )
                     }
-                    Text(
-                        text = stringResource(R.string.settings_longterm_desc),
-                        style = MaterialTheme.typography.bodySmall
-                    )
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onOpenSystemPrompt,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(stringResource(R.string.settings_show_sysprompt))
-                    }
-                    OutlinedButton(
-                        onClick = onOpenLongTerm,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(stringResource(R.string.settings_manage_longterm))
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = stringResource(R.string.settings_longterm),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settings.longTerm,
+                                onCheckedChange = { onChange(settings.copy(longTerm = it)) }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_longterm_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = stringResource(R.string.settings_strategy),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    StrategyDropdown(
-                        selected = settings.strategy,
-                        onSelect = { onChange(settings.copy(strategy = it)) }
-                    )
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onOpenSystemPrompt,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(stringResource(R.string.settings_show_sysprompt))
+                        }
+                        OutlinedButton(
+                            onClick = onOpenLongTerm,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(stringResource(R.string.settings_manage_longterm))
+                        }
+                    }
+                }
+
+                item {
+                    OutlinedButton(
+                        onClick = onOpenProfile,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.settings_profile))
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.settings_strategy),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        StrategyDropdown(
+                            selected = settings.strategy,
+                            onSelect = { onChange(settings.copy(strategy = it)) }
+                        )
+                    }
                 }
 
                 if (settings.strategy != ContextStrategy.BRANCHING) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = stringResource(R.string.settings_window, settings.historyWindow),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Slider(
-                            value = settings.historyWindow.toFloat(),
-                            onValueChange = { onChange(settings.copy(historyWindow = it.roundToInt())) },
-                            valueRange = 5f..30f
-                        )
-                        Text(
-                            text = stringResource(R.string.settings_window_desc),
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = stringResource(R.string.settings_window, settings.historyWindow),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Slider(
+                                value = settings.historyWindow.toFloat(),
+                                onValueChange = { onChange(settings.copy(historyWindow = it.roundToInt())) },
+                                valueRange = 5f..30f
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_window_desc),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     }
                 }
             }
@@ -602,6 +638,7 @@ private fun LongTermCategory.label(): String = when (this) {
     LongTermCategory.DECISION -> "Решение"
     LongTermCategory.KNOWLEDGE -> "Знание"
 }
+
 
 @Composable
 private fun ModelDropdown(
