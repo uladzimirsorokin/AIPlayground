@@ -42,6 +42,8 @@ class ChatAgent(
     private val longTermStore: LongTermStore,
     private val longTermEnabled: () -> Boolean,
     private val profileStore: ProfileStore,
+    private val taskStateStore: TaskStateStore,
+    private val taskStateEnabled: () -> Boolean,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
@@ -89,6 +91,32 @@ class ChatAgent(
     val savedProfiles: List<SavedProfile> get() = profiles.toList()
 
     val activeProfileId: String? get() = _activeProfileId
+
+    // Формализованное состояние задачи (День 13): конечный автомат этап/шаг/ожидаемое действие.
+    private val taskMachine = TaskStateMachine(
+        client = client,
+        model = model,
+        store = taskStateStore
+    )
+
+    val taskState: TaskState get() = taskMachine.state
+
+    val taskPaused: Boolean get() = taskMachine.paused
+
+    val taskSummaryText: String get() = taskMachine.summaryText
+
+    fun pauseTask() = taskMachine.pause()
+
+    fun resumeTask() = taskMachine.resume()
+
+    fun resetTask() = taskMachine.reset()
+
+    /** Отправляет последний ответ ассистента на верификацию; автомат сам решает DONE или доработка. */
+    suspend fun verifyTaskResult(): VerificationResult? {
+        val key = apiKey() ?: throw IllegalStateException("API key is not set")
+        val resultText = _history.lastOrNull { it.role == "assistant" }?.content ?: return null
+        return taskMachine.verifyResult(key, _history, resultText)
+    }
 
     // Краткосрочный слой = активная ветка диалога; ветки — живые списки.
     private var _history: MutableList<ChatMessage>
@@ -284,6 +312,10 @@ class ChatAgent(
             memory.longTermText.takeIf { it.isNotBlank() && longTermEnabled() }?.let {
                 add(ChatMessage("system", "Долговременная память:\n$it"))
             }
+            // Формализованное состояние задачи.
+            if (taskStateEnabled()) {
+                taskMachine.summaryText.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+            }
             when (strat) {
                 ContextStrategy.SLIDING_WINDOW ->
                     _history.takeLast(window).forEach { add(it) }
@@ -327,11 +359,13 @@ class ChatAgent(
         shortTermStore.save(_history)
         workingStore.saveSummary(memory.summary)
         memory.consolidate(key, userMessage, result.content)
+        if (taskStateEnabled()) taskMachine.updateState(key, userMessage, result.content)
         Log.d(
             "AGENT",
             "done: model=${result.model} in=${result.promptTokens} out=${result.completionTokens} " +
                 "total=${result.totalTokens} cost=${result.costUsd} history=${_history.size}msgs " +
                 "summary=${memory.summary.length} profile=${profile.text.length} layers=${memory.info} " +
+                "task=${taskMachine.state.stage}/${taskMachine.state.step} paused=${taskMachine.paused} " +
                 "sentEst=${estimate(messages)} fullEst=${estimate(_history)} " +
                 "saved=${stats.savedTokens} compactions=${stats.compactions} requests=${stats.requests} " +
                 "compacted=$compacted truncated=$truncated"

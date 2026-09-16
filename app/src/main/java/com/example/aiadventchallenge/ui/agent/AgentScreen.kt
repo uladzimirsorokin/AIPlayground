@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
@@ -61,6 +62,7 @@ import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.agent.ContextStrategy
 import com.example.aiadventchallenge.data.agent.LongTermCategory
 import com.example.aiadventchallenge.data.agent.LongTermEntry
+import com.example.aiadventchallenge.data.agent.TaskStage
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +84,9 @@ fun AgentScreen(
     val branchNames by viewModel.branchNames.collectAsState()
     val activeBranch by viewModel.activeBranch.collectAsState()
     val longTerm by viewModel.longTerm.collectAsState()
+    val taskState by viewModel.taskState.collectAsState()
+    val taskPaused by viewModel.taskPaused.collectAsState()
+    val verifying by viewModel.verifying.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showLongTerm by rememberSaveable { mutableStateOf(false) }
@@ -131,6 +136,56 @@ fun AgentScreen(
                         onCheckpoint = viewModel::saveCheckpoint,
                         onFork = viewModel::forkFromCheckpoint
                     )
+                }
+                if (settings.taskState) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = buildString {
+                                append(stringResource(R.string.task_bar_stage, taskState.stage.name))
+                                append(stringResource(R.string.task_bar_step, taskState.step))
+                                taskState.stepLabel.takeIf { it.isNotBlank() }?.let {
+                                    append(" (").append(it).append(")")
+                                }
+                                taskState.expectedAction.takeIf { it.isNotBlank() }?.let {
+                                    append("\n").append(stringResource(R.string.task_bar_expected, it))
+                                }
+                                if (taskPaused) append("\n").append(stringResource(R.string.task_bar_paused))
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (taskState.stage == TaskStage.VALIDATION) {
+                            OutlinedButton(
+                                onClick = viewModel::verifyTaskResult,
+                                enabled = !verifying
+                            ) {
+                                Text(
+                                    if (verifying) {
+                                        stringResource(R.string.task_verifying)
+                                    } else {
+                                        stringResource(R.string.task_verify)
+                                    }
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = if (taskPaused) viewModel::resumeTask else viewModel::pauseTask
+                        ) {
+                            Text(stringResource(if (taskPaused) R.string.task_resume else R.string.task_pause))
+                        }
+                        OutlinedButton(onClick = viewModel::resetTask) {
+                            Text(stringResource(R.string.task_reset))
+                        }
+                    }
                 }
                 Text(
                     text = stringResource(
@@ -369,6 +424,29 @@ text = {
                         }
                         Text(
                             text = stringResource(R.string.settings_longterm_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = stringResource(R.string.settings_task),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settings.taskState,
+                                onCheckedChange = { onChange(settings.copy(taskState = it)) }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_task_desc),
                             style = MaterialTheme.typography.bodySmall
                         )
                     }

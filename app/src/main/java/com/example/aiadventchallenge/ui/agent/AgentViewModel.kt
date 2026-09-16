@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.aiadventchallenge.BuildConfig
+import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.KeyStorage
 import com.example.aiadventchallenge.data.LlmClient
@@ -16,9 +17,11 @@ import com.example.aiadventchallenge.data.agent.DatabaseHistoryStore
 import com.example.aiadventchallenge.data.agent.LongTermCategory
 import com.example.aiadventchallenge.data.agent.LongTermEntry
 import com.example.aiadventchallenge.data.agent.PrefsProfileStore
+import com.example.aiadventchallenge.data.agent.PrefsTaskStateStore
 import com.example.aiadventchallenge.data.agent.PrefsWorkingStore
 import com.example.aiadventchallenge.data.agent.SavedProfile
 import com.example.aiadventchallenge.data.agent.SqliteLongTermStore
+import com.example.aiadventchallenge.data.agent.TaskState
 import com.example.aiadventchallenge.data.agent.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +36,7 @@ data class AgentSettings(
     val strategy: ContextStrategy,
     val historyWindow: Int,
     val longTerm: Boolean,
+    val taskState: Boolean,
     val team: String
 )
 
@@ -68,6 +72,7 @@ class AgentViewModel(
             }.getOrDefault(ContextStrategy.SUMMARY),
             historyWindow = prefs.getInt("agent_history_window", 10),
             longTerm = prefs.getBoolean("agent_longterm", true),
+            taskState = prefs.getBoolean("agent_task_state", true),
             team = prefs.getString("agent_team", "main") ?: "main"
         )
     )
@@ -78,6 +83,7 @@ class AgentViewModel(
     private val workingStore = PrefsWorkingStore(getApplication()) { _settings.value.team }
     private val longTermStore = SqliteLongTermStore(getApplication())
     private val profileStore = PrefsProfileStore(getApplication())
+    private val taskStateStore = PrefsTaskStateStore(getApplication()) { _settings.value.team }
 
     private val agent = ChatAgent(
         client = LlmClient(),
@@ -92,7 +98,9 @@ class AgentViewModel(
         workingStore = workingStore,
         longTermStore = longTermStore,
         longTermEnabled = { _settings.value.longTerm },
-        profileStore = profileStore
+        profileStore = profileStore,
+        taskStateStore = taskStateStore,
+        taskStateEnabled = { _settings.value.taskState }
     )
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -198,6 +206,64 @@ class AgentViewModel(
         }
     }
 
+    private val _taskState = MutableStateFlow(agent.taskState)
+    val taskState: StateFlow<TaskState> = _taskState.asStateFlow()
+
+    private val _taskPaused = MutableStateFlow(agent.taskPaused)
+    val taskPaused: StateFlow<Boolean> = _taskPaused.asStateFlow()
+
+    fun pauseTask() {
+        agent.pauseTask()
+        _taskPaused.value = agent.taskPaused
+    }
+
+    fun resumeTask() {
+        agent.resumeTask()
+        _taskPaused.value = agent.taskPaused
+    }
+
+    fun resetTask() {
+        agent.resetTask()
+        _taskState.value = agent.taskState
+        _taskPaused.value = agent.taskPaused
+    }
+
+    private val _verifying = MutableStateFlow(false)
+    val verifying: StateFlow<Boolean> = _verifying.asStateFlow()
+
+    fun verifyTaskResult() {
+        if (_verifying.value || _sending.value) return
+        _verifying.value = true
+        viewModelScope.launch {
+            try {
+                val verdict = agent.verifyTaskResult()
+                if (verdict != null) {
+                    _messages.value = _messages.value + ChatMessage(
+                        role = "system",
+                        content = if (verdict.passed) {
+                            getApplication<Application>().getString(R.string.task_verified_ok)
+                        } else {
+                            getApplication<Application>().getString(
+                                R.string.task_verified_fail,
+                                verdict.comments.ifBlank { "—" }
+                            )
+                        }
+                    )
+                }
+                _taskState.value = agent.taskState
+                _taskPaused.value = agent.taskPaused
+            } catch (e: Exception) {
+                Log.e("AGENT", "Verify failed", e)
+                _messages.value = _messages.value + ChatMessage(
+                    role = "assistant",
+                    content = "Ошибка верификации: ${e.message ?: "неизвестная"}"
+                )
+            } finally {
+                _verifying.value = false
+            }
+        }
+    }
+
     /** Юзерский system prompt + всё, что агент подмешивает из памяти (итоговый промпт). */
     val effectiveSystemPrompt: String
         get() = buildString {
@@ -215,6 +281,11 @@ class AgentViewModel(
             }
             agent.factsText.takeIf { it.isNotBlank() }?.let {
                 append("\n\nФакты о диалоге (рабочая память):\n").append(it)
+            }
+            if (_settings.value.taskState) {
+                agent.taskSummaryText.takeIf { it.isNotBlank() }?.let {
+                    append("\n\n").append(it)
+                }
             }
         }
 
@@ -293,6 +364,8 @@ class AgentViewModel(
                 )
                 _stats.value = response.stats
                 _longTerm.value = agent.longTermEntries
+                _taskState.value = agent.taskState
+                _taskPaused.value = agent.taskPaused
             } catch (e: Exception) {
                 Log.e("AGENT", "Agent failed", e)
                 _messages.value =
@@ -319,6 +392,7 @@ class AgentViewModel(
             .putString("agent_strategy", new.strategy.name)
             .putInt("agent_history_window", new.historyWindow)
             .putBoolean("agent_longterm", new.longTerm)
+            .putBoolean("agent_task_state", new.taskState)
             .putString("agent_team", new.team)
             .apply()
         _settings.value = new
