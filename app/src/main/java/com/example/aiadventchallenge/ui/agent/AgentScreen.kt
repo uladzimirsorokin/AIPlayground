@@ -60,6 +60,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.agent.ContextStrategy
+import com.example.aiadventchallenge.data.agent.Invariant
+import com.example.aiadventchallenge.data.agent.InvariantCategory
 import com.example.aiadventchallenge.data.agent.LongTermCategory
 import com.example.aiadventchallenge.data.agent.LongTermEntry
 import com.example.aiadventchallenge.data.agent.TaskStage
@@ -87,10 +89,12 @@ fun AgentScreen(
     val taskState by viewModel.taskState.collectAsState()
     val taskPaused by viewModel.taskPaused.collectAsState()
     val verifying by viewModel.verifying.collectAsState()
+    val invariants by viewModel.invariants.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showLongTerm by rememberSaveable { mutableStateOf(false) }
     var showSystemPrompt by rememberSaveable { mutableStateOf(false) }
+    var showInvariants by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     Scaffold(
@@ -294,7 +298,8 @@ fun AgentScreen(
             onChange = { newSettings -> viewModel.updateSettings { newSettings } },
             onOpenSystemPrompt = { showSettings = false; showSystemPrompt = true },
             onOpenLongTerm = { showSettings = false; showLongTerm = true },
-            onOpenProfile = { showSettings = false; onOpenProfile() }
+            onOpenProfile = { showSettings = false; onOpenProfile() },
+            onOpenInvariants = { showSettings = false; showInvariants = true }
         )
     }
 
@@ -314,6 +319,16 @@ fun AgentScreen(
             onDismiss = { showLongTerm = false }
         )
     }
+
+    if (showInvariants) {
+        InvariantsDialog(
+            invariants = invariants,
+            onAdd = viewModel::addInvariant,
+            onRemove = viewModel::removeInvariant,
+            onClear = viewModel::clearInvariants,
+            onDismiss = { showInvariants = false }
+        )
+    }
 }
 
 @Composable
@@ -324,7 +339,8 @@ private fun AgentSettingsDialog(
     onChange: (AgentSettings) -> Unit,
     onOpenSystemPrompt: () -> Unit,
     onOpenLongTerm: () -> Unit,
-    onOpenProfile: () -> Unit
+    onOpenProfile: () -> Unit,
+    onOpenInvariants: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -449,6 +465,53 @@ text = {
                             text = stringResource(R.string.settings_task_desc),
                             style = MaterialTheme.typography.bodySmall
                         )
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = stringResource(R.string.settings_invariants),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settings.invariants,
+                                onCheckedChange = { onChange(settings.copy(invariants = it)) }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_invariants_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = stringResource(R.string.settings_invariants_guard),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settings.invariantGuard,
+                                onCheckedChange = { onChange(settings.copy(invariantGuard = it)) }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_invariants_guard_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedButton(
+                            onClick = onOpenInvariants,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.settings_manage_invariants))
+                        }
                     }
                 }
 
@@ -715,6 +778,131 @@ private fun LongTermCategory.label(): String = when (this) {
     LongTermCategory.PROFILE -> "Профиль"
     LongTermCategory.DECISION -> "Решение"
     LongTermCategory.KNOWLEDGE -> "Знание"
+}
+
+@Composable
+private fun InvariantsDialog(
+    invariants: List<Invariant>,
+    onAdd: (InvariantCategory, String) -> Unit,
+    onRemove: (Long) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var category by remember { mutableStateOf(InvariantCategory.ARCHITECTURE) }
+    var content by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.invariants_title)) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.invariants_hint),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (invariants.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.invariants_empty),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        invariants.forEach { inv ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "[${inv.category.name.lowercase()}] ${inv.content}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { onRemove(inv.id) }) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = stringResource(R.string.invariants_remove)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    InvariantCategoryDropdown(
+                        selected = category,
+                        onSelect = { category = it }
+                    )
+                    OutlinedTextField(
+                        value = content,
+                        onValueChange = { content = it },
+                        label = { Text(stringResource(R.string.invariants_add_hint)) },
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2
+                    )
+                }
+                Button(
+                    onClick = {
+                        if (content.isNotBlank()) {
+                            onAdd(category, content.trim())
+                            content = ""
+                        }
+                    },
+                    enabled = content.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.invariants_add))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.settings_done))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onClear) {
+                Text(stringResource(R.string.invariants_clear))
+            }
+        }
+    )
+}
+
+@Composable
+private fun InvariantCategoryDropdown(
+    selected: InvariantCategory,
+    onSelect: (InvariantCategory) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text(selected.label(), maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            InvariantCategory.values().forEach { cat ->
+                DropdownMenuItem(
+                    text = { Text(cat.label()) },
+                    onClick = {
+                        onSelect(cat)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+private fun InvariantCategory.label(): String = when (this) {
+    InvariantCategory.ARCHITECTURE -> "Архитектура"
+    InvariantCategory.DECISIONS -> "Решения"
+    InvariantCategory.STACK -> "Стек"
+    InvariantCategory.BUSINESS -> "Бизнес"
 }
 
 

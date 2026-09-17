@@ -44,6 +44,9 @@ class ChatAgent(
     private val profileStore: ProfileStore,
     private val taskStateStore: TaskStateStore,
     private val taskStateEnabled: () -> Boolean,
+    private val invariantsStore: InvariantsStore,
+    private val invariantsEnabled: () -> Boolean,
+    private val invariantGuardEnabled: () -> Boolean,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
@@ -58,6 +61,14 @@ class ChatAgent(
                 "Обнови его по новому сообщению: добавь новые факты, исправь изменившиеся, " +
                 "удали устаревшие. Верни ТОЛЬКО список фактов, каждый на новой строке " +
                 "в формате \"ключ: значение\". Если новых фактов нет — верни исходный блок."
+        const val GUARD_PROMPT =
+            "Ты — страж инвариантов проекта. Ниже инварианты, которые нельзя нарушать, и предлагаемое решение.\n" +
+                "Если решение нарушает хотя бы один инвариант — откажись и объясни.\n" +
+                "Верни ТОЛЬКО JSON (без markdown): " +
+                "{\"violates\":true,\"category\":\"STACK\",\"refusal\":\"Отказ с объяснением, какой инвариант нарушен и почему\"}\n" +
+                "- violates: true/false\n" +
+                "- category: категория нарушенного инварианта (ARCHITECTURE/DECISIONS/STACK/BUSINESS) или \"\"\n" +
+                "- refusal: текст отказа с объяснением; пустая строка, если violations=false"
         const val PROFILE_PROMPT =
             "Ты — модуль построения профиля пользователя. По диалогу определи устойчивые предпочтения.\n" +
                 "Верни ТОЛЬКО JSON (без markdown и пояснений) вида: " +
@@ -116,6 +127,69 @@ class ChatAgent(
         val key = apiKey() ?: throw IllegalStateException("API key is not set")
         val resultText = _history.lastOrNull { it.role == "assistant" }?.content ?: return null
         return taskMachine.verifyResult(key, _history, resultText)
+    }
+
+    // Инварианты проекта (День 14): правила, которые ассистент не имеет права нарушать.
+    private var invariants: List<Invariant> = invariantsStore.load()
+
+    val invariantList: List<Invariant> get() = invariants.toList()
+
+    /** Блок для инъекции в каждый запрос. */
+    val invariantBlock: String
+        get() = if (invariants.isEmpty()) "" else buildString {
+            append("Инварианты (не нарушать):\n")
+            invariants.forEach { inv ->
+                append("- [").append(inv.category.name.lowercase()).append("] ").append(inv.content).append("\n")
+            }
+        }
+
+    fun addInvariant(category: InvariantCategory, content: String) {
+        if (content.isBlank()) return
+        invariants = invariants + Invariant(id = System.nanoTime(), category = category, content = content.trim())
+        invariantsStore.save(invariants)
+        Log.d("AGENT", "invariant: added [${category}] total=${invariants.size}")
+    }
+
+    fun removeInvariant(id: Long) {
+        invariants = invariants.filterNot { it.id == id }
+        invariantsStore.save(invariants)
+        Log.d("AGENT", "invariant: removed id=$id total=${invariants.size}")
+    }
+
+    fun clearInvariants() {
+        invariants = emptyList()
+        invariantsStore.clear()
+        Log.d("AGENT", "invariant: cleared")
+    }
+
+    /** Страж: отдельный LLM-вызов проверяет предложенное решение по инвариантам. */
+    private suspend fun checkInvariants(key: String, reply: String): GuardVerdict? = try {
+        val result = client.completeChat(
+            listOf(
+                ChatMessage("system", GUARD_PROMPT),
+                ChatMessage("user", "Инварианты:\n$invariantBlock\n\nПредлагаемое решение:\n$reply")
+            ),
+            key,
+            model = model(),
+            responseFormat = "json_object",
+            temperature = 0.2
+        )
+        parseGuardVerdict(result.content)
+    } catch (e: Exception) {
+        Log.d("AGENT", "invariant: guard failed: ${e.message}")
+        null
+    }
+
+    private fun parseGuardVerdict(raw: String): GuardVerdict? = try {
+        val clean = raw.trim().removePrefix("```json").removeSuffix("```").trim()
+        val o = JSONObject(clean)
+        GuardVerdict(
+            violates = o.optBoolean("violates", false),
+            category = o.optString("category", ""),
+            refusal = o.optString("refusal", "").trim()
+        )
+    } catch (e: Exception) {
+        null
     }
 
     // Краткосрочный слой = активная ветка диалога; ветки — живые списки.
@@ -308,6 +382,10 @@ class ChatAgent(
             systemPrompt().takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             // Профиль пользователя подмешивается в каждый запрос.
             profile.text.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+            // Инварианты проекта — правила, которые нельзя нарушать.
+            if (invariantsEnabled()) {
+                invariantBlock.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+            }
             // Долговременный слой подмешивается в каждый запрос независимо от стратегии.
             memory.longTermText.takeIf { it.isNotBlank() && longTermEnabled() }?.let {
                 add(ChatMessage("system", "Долговременная память:\n$it"))
@@ -355,17 +433,27 @@ class ChatAgent(
         val truncated = result.promptTokens > 0 &&
             result.promptTokens < (sentChars / 3.0) * 0.6
 
-        _history.add(ChatMessage("assistant", result.content))
+        // Страж инвариантов: если включён и есть правила — решение проверяется,
+        // при нарушении показываем отказ с объяснением вместо ответа.
+        var reply = result.content
+        if (invariantsEnabled() && invariantGuardEnabled() && invariantBlock.isNotBlank()) {
+            checkInvariants(key, result.content)?.takeIf { it.violates }?.let { verdict ->
+                reply = verdict.refusal.ifBlank { "Отказ: решение нарушает инварианты проекта." }
+                Log.d("AGENT", "invariant: refused category=${verdict.category} \"${reply.take(140)}\"")
+            }
+        }
+
+        _history.add(ChatMessage("assistant", reply))
         shortTermStore.save(_history)
         workingStore.saveSummary(memory.summary)
-        memory.consolidate(key, userMessage, result.content)
-        if (taskStateEnabled()) taskMachine.updateState(key, userMessage, result.content)
+        memory.consolidate(key, userMessage, reply)
+        if (taskStateEnabled()) taskMachine.updateState(key, userMessage, reply)
         Log.d(
             "AGENT",
             "done: model=${result.model} in=${result.promptTokens} out=${result.completionTokens} " +
                 "total=${result.totalTokens} cost=${result.costUsd} history=${_history.size}msgs " +
                 "summary=${memory.summary.length} profile=${profile.text.length} layers=${memory.info} " +
-                "task=${taskMachine.state.stage}/${taskMachine.state.step} paused=${taskMachine.paused} " +
+                "invariants=${invariants.size} task=${taskMachine.state.stage}/${taskMachine.state.step} paused=${taskMachine.paused} " +
                 "sentEst=${estimate(messages)} fullEst=${estimate(_history)} " +
                 "saved=${stats.savedTokens} compactions=${stats.compactions} requests=${stats.requests} " +
                 "compacted=$compacted truncated=$truncated"
@@ -382,7 +470,7 @@ class ChatAgent(
         )
 
         return AgentResponse(
-            reply = result.content,
+            reply = reply,
             promptTokens = result.promptTokens,
             completionTokens = result.completionTokens,
             totalTokens = result.totalTokens,

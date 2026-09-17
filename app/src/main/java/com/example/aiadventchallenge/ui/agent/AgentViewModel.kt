@@ -16,6 +16,9 @@ import com.example.aiadventchallenge.data.agent.ContextStrategy
 import com.example.aiadventchallenge.data.agent.DatabaseHistoryStore
 import com.example.aiadventchallenge.data.agent.LongTermCategory
 import com.example.aiadventchallenge.data.agent.LongTermEntry
+import com.example.aiadventchallenge.data.agent.Invariant
+import com.example.aiadventchallenge.data.agent.InvariantCategory
+import com.example.aiadventchallenge.data.agent.PrefsInvariantsStore
 import com.example.aiadventchallenge.data.agent.PrefsProfileStore
 import com.example.aiadventchallenge.data.agent.PrefsTaskStateStore
 import com.example.aiadventchallenge.data.agent.PrefsWorkingStore
@@ -37,6 +40,8 @@ data class AgentSettings(
     val historyWindow: Int,
     val longTerm: Boolean,
     val taskState: Boolean,
+    val invariants: Boolean,
+    val invariantGuard: Boolean,
     val team: String
 )
 
@@ -73,6 +78,8 @@ class AgentViewModel(
             historyWindow = prefs.getInt("agent_history_window", 10),
             longTerm = prefs.getBoolean("agent_longterm", true),
             taskState = prefs.getBoolean("agent_task_state", true),
+            invariants = prefs.getBoolean("agent_invariants", true),
+            invariantGuard = prefs.getBoolean("agent_invariants_guard", true),
             team = prefs.getString("agent_team", "main") ?: "main"
         )
     )
@@ -84,6 +91,7 @@ class AgentViewModel(
     private val longTermStore = SqliteLongTermStore(getApplication())
     private val profileStore = PrefsProfileStore(getApplication())
     private val taskStateStore = PrefsTaskStateStore(getApplication()) { _settings.value.team }
+    private val invariantsStore = PrefsInvariantsStore(getApplication())
 
     private val agent = ChatAgent(
         client = LlmClient(),
@@ -100,7 +108,10 @@ class AgentViewModel(
         longTermEnabled = { _settings.value.longTerm },
         profileStore = profileStore,
         taskStateStore = taskStateStore,
-        taskStateEnabled = { _settings.value.taskState }
+        taskStateEnabled = { _settings.value.taskState },
+        invariantsStore = invariantsStore,
+        invariantsEnabled = { _settings.value.invariants },
+        invariantGuardEnabled = { _settings.value.invariantGuard }
     )
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -264,12 +275,35 @@ class AgentViewModel(
         }
     }
 
+    private val _invariants = MutableStateFlow(agent.invariantList)
+    val invariants: StateFlow<List<Invariant>> = _invariants.asStateFlow()
+
+    fun addInvariant(category: InvariantCategory, content: String) {
+        agent.addInvariant(category, content)
+        _invariants.value = agent.invariantList
+    }
+
+    fun removeInvariant(id: Long) {
+        agent.removeInvariant(id)
+        _invariants.value = agent.invariantList
+    }
+
+    fun clearInvariants() {
+        agent.clearInvariants()
+        _invariants.value = agent.invariantList
+    }
+
     /** Юзерский system prompt + всё, что агент подмешивает из памяти (итоговый промпт). */
     val effectiveSystemPrompt: String
         get() = buildString {
             append(_settings.value.systemPrompt)
             agent.currentProfile.text.takeIf { it.isNotBlank() }?.let {
                 append("\n\n").append(it)
+            }
+            if (_settings.value.invariants) {
+                agent.invariantBlock.takeIf { it.isNotBlank() }?.let {
+                    append("\n\n").append(it)
+                }
             }
             if (_settings.value.longTerm) {
                 agent.longTermText.takeIf { it.isNotBlank() }?.let {
@@ -393,6 +427,8 @@ class AgentViewModel(
             .putInt("agent_history_window", new.historyWindow)
             .putBoolean("agent_longterm", new.longTerm)
             .putBoolean("agent_task_state", new.taskState)
+            .putBoolean("agent_invariants", new.invariants)
+            .putBoolean("agent_invariants_guard", new.invariantGuard)
             .putString("agent_team", new.team)
             .apply()
         _settings.value = new
