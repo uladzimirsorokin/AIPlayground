@@ -142,52 +142,66 @@ fun AgentScreen(
                     )
                 }
                 if (settings.taskState) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(
-                            text = buildString {
-                                append(stringResource(R.string.task_bar_stage, taskState.stage.name))
-                                append(stringResource(R.string.task_bar_step, taskState.step))
-                                taskState.stepLabel.takeIf { it.isNotBlank() }?.let {
-                                    append(" (").append(it).append(")")
-                                }
-                                taskState.expectedAction.takeIf { it.isNotBlank() }?.let {
-                                    append("\n").append(stringResource(R.string.task_bar_expected, it))
-                                }
-                                if (taskPaused) append("\n").append(stringResource(R.string.task_bar_paused))
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (taskState.stage == TaskStage.VALIDATION) {
-                            OutlinedButton(
-                                onClick = viewModel::verifyTaskResult,
-                                enabled = !verifying
-                            ) {
-                                Text(
-                                    if (verifying) {
-                                        stringResource(R.string.task_verifying)
-                                    } else {
-                                        stringResource(R.string.task_verify)
-                                    }
-                                )
-                            }
-                        }
-                        OutlinedButton(
-                            onClick = if (taskPaused) viewModel::resumeTask else viewModel::pauseTask
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(stringResource(if (taskPaused) R.string.task_resume else R.string.task_pause))
+                            Text(
+                                text = buildString {
+                                    append(stringResource(R.string.task_bar_stage, taskState.stage.name))
+                                    append(stringResource(R.string.task_bar_step, taskState.step))
+                                    taskState.stepLabel.takeIf { it.isNotBlank() }?.let {
+                                        append(" (").append(it).append(")")
+                                    }
+                                    taskState.expectedAction.takeIf { it.isNotBlank() }?.let {
+                                        append("\n").append(stringResource(R.string.task_bar_expected, it))
+                                    }
+                                    if (taskPaused) append("\n").append(stringResource(R.string.task_bar_paused))
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            StageDropdown(
+                                current = taskState.stage,
+                                onRequest = viewModel::requestStage
+                            )
                         }
-                        OutlinedButton(onClick = viewModel::resetTask) {
-                            Text(stringResource(R.string.task_reset))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (taskState.stage == TaskStage.VALIDATION) {
+                                OutlinedButton(
+                                    onClick = viewModel::verifyTaskResult,
+                                    enabled = !verifying
+                                ) {
+                                    Text(
+                                        if (verifying) {
+                                            stringResource(R.string.task_verifying)
+                                        } else {
+                                            stringResource(R.string.task_verify)
+                                        }
+                                    )
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = if (taskPaused) viewModel::resumeTask else viewModel::pauseTask
+                            ) {
+                                Text(stringResource(if (taskPaused) R.string.task_resume else R.string.task_pause))
+                            }
+                            OutlinedButton(onClick = viewModel::resetTask) {
+                                Text(stringResource(R.string.task_reset))
+                            }
                         }
                     }
                 }
@@ -903,6 +917,30 @@ private fun InvariantCategory.label(): String = when (this) {
     InvariantCategory.DECISIONS -> "Решения"
     InvariantCategory.STACK -> "Стек"
     InvariantCategory.BUSINESS -> "Бизнес"
+}
+
+@Composable
+private fun StageDropdown(
+    current: TaskStage,
+    onRequest: (TaskStage) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text(stringResource(R.string.task_stage_switch, current.name), maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            TaskStage.values().forEach { stage ->
+                DropdownMenuItem(
+                    text = { Text(stage.name, maxLines = 1) },
+                    onClick = {
+                        onRequest(stage)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
 }
 
 

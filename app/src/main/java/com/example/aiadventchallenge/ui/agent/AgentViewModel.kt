@@ -25,6 +25,8 @@ import com.example.aiadventchallenge.data.agent.PrefsWorkingStore
 import com.example.aiadventchallenge.data.agent.SavedProfile
 import com.example.aiadventchallenge.data.agent.SqliteLongTermStore
 import com.example.aiadventchallenge.data.agent.TaskState
+import com.example.aiadventchallenge.data.agent.TaskStage
+import com.example.aiadventchallenge.data.agent.TransitionResult
 import com.example.aiadventchallenge.data.agent.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -237,6 +239,29 @@ class AgentViewModel(
         agent.resetTask()
         _taskState.value = agent.taskState
         _taskPaused.value = agent.taskPaused
+    }
+
+    /** Явный запрос перехода на этап; недопустимый отклоняется с причиной и списком разрешённых целей. */
+    fun requestStage(stage: TaskStage) {
+        val result = agent.requestTaskTransition(stage)
+        _taskState.value = agent.taskState
+        _taskPaused.value = agent.taskPaused
+        _messages.value = _messages.value + when (result) {
+            is TransitionResult.Ok -> ChatMessage(
+                role = "system",
+                content = getApplication<Application>().getString(R.string.task_transition_ok, result.target.name)
+            )
+            is TransitionResult.Rejected -> ChatMessage(
+                role = "system",
+                content = getApplication<Application>().getString(
+                    R.string.task_transition_rejected,
+                    result.from.name,
+                    result.target.name,
+                    result.reason,
+                    if (result.allowed.isEmpty()) "—" else result.allowed.joinToString(", ") { it.name }
+                )
+            )
+        }
     }
 
     private val _verifying = MutableStateFlow(false)

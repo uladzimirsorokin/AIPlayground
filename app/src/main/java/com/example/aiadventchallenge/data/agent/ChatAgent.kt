@@ -122,6 +122,9 @@ class ChatAgent(
 
     fun resetTask() = taskMachine.reset()
 
+    /** Явный запрос перехода на этап: допустимый выполняется, недопустимый отклоняется. */
+    fun requestTaskTransition(stage: TaskStage): TransitionResult = taskMachine.requestTransition(stage)
+
     /** Отправляет последний ответ ассистента на верификацию; автомат сам решает DONE или доработка. */
     suspend fun verifyTaskResult(): VerificationResult? {
         val key = apiKey() ?: throw IllegalStateException("API key is not set")

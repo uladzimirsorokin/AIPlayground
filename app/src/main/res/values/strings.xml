@@ -87,6 +87,9 @@
     <string name="task_pause">Пауза</string>
     <string name="task_resume">Дальше</string>
     <string name="task_reset">Сброс</string>
+    <string name="task_stage_switch">Этап: %1$s</string>
+    <string name="task_transition_ok">Переход на этап %1$s выполнен.</string>
+    <string name="task_transition_rejected">Переход %1$s → %2$s отклонён: %3$s\nДопустимые переходы: %4$s</string>
     <string name="task_verify">Верифицировать</string>
     <string name="task_verifying">Проверка…</string>
     <string name="task_verified_ok">Верификация пройдена — задача завершена (DONE).</string>

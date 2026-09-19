@@ -11,8 +11,34 @@ import org.json.JSONObject
  * этап (PLANNING → EXECUTION → VALIDATION → DONE), текущий шаг и ожидаемое действие.
  * Состояние хранится отдельно (скоуп на команду) и подмешивается в каждый запрос,
  * поэтому пауза на любом этапе и продолжение работают без повторных объяснений.
+ *
+ * День 15 — контролируемые переходы: смена этапа только по таблице [TASK_TRANSITIONS]
+ * через единый шлюз [TaskStateMachine.requestTransition] с предусловиями.
  */
 enum class TaskStage { PLANNING, EXECUTION, VALIDATION, DONE }
+
+/** Таблица разрешённых переходов между этапами. Перепрыгнуть этап нельзя. */
+val TASK_TRANSITIONS: Map<TaskStage, Set<TaskStage>> = mapOf(
+    TaskStage.PLANNING to setOf(TaskStage.EXECUTION),
+    TaskStage.EXECUTION to setOf(TaskStage.VALIDATION, TaskStage.PLANNING),
+    TaskStage.VALIDATION to setOf(TaskStage.DONE, TaskStage.EXECUTION),
+    TaskStage.DONE to emptySet()
+)
+
+/** Куда можно перейти из текущего этапа. */
+fun TaskStage.allowedTransitions(): Set<TaskStage> = TASK_TRANSITIONS[this] ?: emptySet()
+
+/** Итог попытки перехода: выполнен или отклонён с причиной и списком разрешённых целей. */
+sealed class TransitionResult {
+    data class Ok(val target: TaskStage) : TransitionResult()
+
+    data class Rejected(
+        val from: TaskStage,
+        val target: TaskStage,
+        val reason: String,
+        val allowed: Set<TaskStage>
+    ) : TransitionResult()
+}
 
 data class TaskState(
     val stage: TaskStage = TaskStage.PLANNING,
@@ -97,13 +123,15 @@ class TaskStateMachine(
         const val UPDATE_PROMPT =
             "Ты — менеджер состояния задачи. По последнему обмену сообщениями определи формальное состояние задачи.\n" +
                 "Этапы: PLANNING (планирование), EXECUTION (выполнение), VALIDATION (проверка), DONE (задача завершена).\n" +
+                "Смена этапа допускается только по цепочке PLANNING→EXECUTION→VALIDATION→DONE и только по одному шагу:\n" +
+                "перепрыгивать этапы нельзя (EXECUTION→DONE или PLANNING→VALIDATION запрещены), DONE — только после VALIDATION.\n" +
                 "Верни ТОЛЬКО JSON (без markdown): " +
                 "{\"stage\":\"EXECUTION\",\"step\":2,\"stepLabel\":\"пишем код\",\"expectedAction\":\"что ожидается от пользователя дальше\"}\n" +
-                "- stage: текущий этап задачи\n" +
+                "- stage: текущий этап задачи (допустимый по цепочке)\n" +
                 "- step: номер текущего шага внутри этапа (целое)\n" +
                 "- stepLabel: короткое название шага\n" +
                 "- expectedAction: что пользователь должен сделать дальше\n" +
-                "Переход на DONE — только если задача реально завершена."
+                "Переход на DONE — только если задача реально завершена после валидации."
         const val VERIFY_PROMPT =
             "Ты — верификатор результата задачи. Ниже контекст задачи (диалог) и проверяемый результат.\n" +
                 "Оцени, соответствует ли результат требованиям задачи и готов ли он.\n" +
@@ -118,10 +146,17 @@ class TaskStateMachine(
     var paused: Boolean = store.loadPaused()
         private set
 
-    /** Блок для инъекции: состояние + правило этапа + признак паузы. */
+    /** Блок для инъекции: состояние + разрешённые переходы + правило этапа + признак паузы. */
     val summaryText: String
         get() = buildString {
             append(state.text)
+            val allowed = state.stage.allowedTransitions()
+            append("- Разрешённые переходы: ")
+                .append(
+                    if (allowed.isEmpty()) "нет (задача завершена)"
+                    else allowed.joinToString(", ") { it.name }
+                )
+                .append("\n")
             if (state.stage == TaskStage.PLANNING) {
                 append(
                     "\n- Правило этапа: на PLANNING по кодовым задачам не приводи конкретные " +
@@ -152,7 +187,7 @@ class TaskStateMachine(
         Log.d("AGENT", "task: reset")
     }
 
-    /** Единственный LLM-вызов, который явно переводит автомат в новое состояние. */
+    /** Единственный LLM-вызов, который предлагает новое состояние; применяется через шлюз переходов. */
     suspend fun updateState(key: String, userMessage: String, assistantReply: String) {
         if (paused) return
         val parsed = try {
@@ -176,15 +211,84 @@ class TaskStateMachine(
             Log.d("AGENT", "task: update failed: ${e.message}")
             null
         } ?: return
-        if (parsed != state) {
+        if (parsed == state) return
+
+        val target = parsed.stage
+        if (target == state.stage) {
+            // Тот же этап — обновляем шаг/ожидание без смены этапа.
             state = parsed
-            store.saveState(parsed)
+            store.saveState(state)
             Log.d(
                 "AGENT",
-                "task: -> ${parsed.stage} step=${parsed.step} " +
-                    "label=\"${parsed.stepLabel}\" expected=\"${parsed.expectedAction}\""
+                "task: ${target} step=${parsed.step} label=\"${parsed.stepLabel}\" expected=\"${parsed.expectedAction}\""
+            )
+            return
+        }
+
+        when (val result = requestTransition(target)) {
+            is TransitionResult.Ok -> {
+                state = parsed
+                store.saveState(state)
+                Log.d(
+                    "AGENT",
+                    "task: -> ${target} step=${parsed.step} label=\"${parsed.stepLabel}\" expected=\"${parsed.expectedAction}\""
+                )
+            }
+            is TransitionResult.Rejected -> {
+                // Остаёмся на текущем этапе; фиксируем шаг/ожидание, чтобы агент знал, что делать дальше.
+                state = parsed.copy(stage = state.stage)
+                store.saveState(state)
+                Log.d(
+                    "AGENT",
+                    "task: transition rejected ${result.from}->${result.target}: ${result.reason}"
+                )
+            }
+        }
+    }
+
+    /** Единый шлюз смены этапа: таблица разрешённых переходов + предусловия этапа. */
+    fun requestTransition(target: TaskStage): TransitionResult {
+        val from = state.stage
+        if (target == from) {
+            return TransitionResult.Rejected(
+                from, target,
+                "Задача уже на этапе ${from.name}.",
+                from.allowedTransitions()
             )
         }
+        if (target !in from.allowedTransitions()) {
+            return TransitionResult.Rejected(
+                from, target,
+                "Переход ${from.name} → ${target.name} запрещён таблицей переходов (нельзя перепрыгнуть этап).",
+                from.allowedTransitions()
+            )
+        }
+        preconditionError(from, target)?.let { reason ->
+            return TransitionResult.Rejected(from, target, reason, from.allowedTransitions())
+        }
+        state = state.copy(stage = target)
+        store.saveState(state)
+        Log.d("AGENT", "task: transition ${from.name} -> ${target.name}")
+        return TransitionResult.Ok(target)
+    }
+
+    /** Предусловия этапа: защита от «перепрыгивания» смысла, а не только таблицы. */
+    private fun preconditionError(
+        from: TaskStage,
+        to: TaskStage
+    ): String? {
+        if (from == TaskStage.PLANNING && to == TaskStage.EXECUTION) {
+            // Нельзя реализацию до утверждённого плана: план должен быть хотя бы описан (шаг с названием).
+            // Проверку «незакрытых правок» по ключевым словам убрали: LLM пишет в expectedAction
+            // «Подтвердить/правки» и в штатном потоке — она давала ложные срабатывания.
+            if (state.stepLabel.isBlank()) {
+                return "Нельзя приступать к реализации до утверждённого плана: план ещё не описан."
+            }
+        }
+        if (to == TaskStage.DONE && from != TaskStage.VALIDATION) {
+            return "Нельзя завершить задачу без валидации: финал доступен только с этапа VALIDATION."
+        }
+        return null
     }
 
     /** Верификация результата на этапе VALIDATION: DONE или возврат в EXECUTION с замечаниями. */
@@ -194,6 +298,10 @@ class TaskStateMachine(
         resultText: String
     ): VerificationResult? {
         val verdict = try {
+            Log.d(
+                "AGENT",
+                "task: verify request context=${context.size}msgs result=${resultText.length}chars"
+            )
             val result = client.completeChat(
                 listOf(
                     ChatMessage("system", VERIFY_PROMPT),
@@ -209,32 +317,40 @@ class TaskStateMachine(
                 responseFormat = "json_object",
                 temperature = 0.2
             )
-            parseVerdict(result.content)
+            parseVerdict(result.content).also { v ->
+                Log.d(
+                    "AGENT",
+                    "task: verify response passed=${v?.passed} comments=\"${v?.comments ?: "parse-fail"}\""
+                )
+            }
         } catch (e: Exception) {
             Log.d("AGENT", "task: verify failed: ${e.message}")
             null
         } ?: return null
 
         if (verdict.passed) {
-            // Пройдено → DONE.
+            // Пройдено → DONE (валидация подтвердила; переход разрешён таблицей).
+            requestTransition(TaskStage.DONE)
             state = TaskState(
                 stage = TaskStage.DONE,
                 step = 1,
                 stepLabel = "Задача завершена",
                 expectedAction = ""
             )
+            store.saveState(state)
             Log.d("AGENT", "task: verify passed -> DONE")
         } else {
-            // Не пройдено → назад в EXECUTION с замечаниями на доработку.
+            // Не пройдено → назад в EXECUTION с замечаниями на доработку (переход разрешён таблицей).
+            requestTransition(TaskStage.EXECUTION)
             state = TaskState(
                 stage = TaskStage.EXECUTION,
                 step = state.step,
                 stepLabel = "Доработка по замечаниям",
                 expectedAction = verdict.comments.ifBlank { "Устранить замечания верификатора" }
             )
+            store.saveState(state)
             Log.d("AGENT", "task: verify failed -> EXECUTION (${verdict.comments})")
         }
-        store.saveState(state)
         return verdict
     }
 
