@@ -14,6 +14,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.aiadventchallenge.ui.agent.AgentScreen
 import com.example.aiadventchallenge.ui.agent.ProfileScreen
 import com.example.aiadventchallenge.ui.home.HomeScreen
+import com.example.aiadventchallenge.ui.mcp.McpScreen
 import com.example.aiadventchallenge.ui.theme.AIAdventChallengeTheme
 
 class MainActivity : ComponentActivity() {
@@ -29,7 +30,10 @@ class MainActivity : ComponentActivity() {
                     val navController = rememberNavController()
                     NavHost(navController = navController, startDestination = "home") {
                         composable("home") {
-                            HomeScreen(onOpenAgent = { navController.navigate("agent") })
+                            HomeScreen(
+                                onOpenAgent = { navController.navigate("agent") },
+                                onOpenMcp = { navController.navigate("mcp") }
+                            )
                         }
                         composable("agent") {
                             AgentScreen(
@@ -39,6 +43,9 @@ class MainActivity : ComponentActivity() {
                         }
                         composable("profile") {
                             ProfileScreen(onBack = { navController.popBackStack() })
+                        }
+                        composable("mcp") {
+                            McpScreen(onBack = { navController.popBackStack() })
                         }
                     }
                 }

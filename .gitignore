@@ -21,4 +21,4 @@ local.properties
 *.jks
 *.keystore
 .kotlin/
-*.md
+*.md__pycache__/

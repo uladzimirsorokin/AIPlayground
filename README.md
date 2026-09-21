@@ -50,6 +50,34 @@ The endpoint used is `LLM_ENDPOINT`, or `LLM_BASE_URL + "/v1/chat/completions"` 
 2. On the first screen paste your API key and press **Save** (it is encrypted and stored in the Android Keystore).
 3. Type a prompt and press **Send** — the answer appears below.
 
+## MCP (Model Context Protocol)
+
+The app includes a minimal MCP client (Streamable HTTP, built on `HttpURLConnection` + `org.json`, no extra dependencies). It connects to an MCP server and lists its tools.
+
+- Open the **MCP** screen from the home screen.
+- By default it points to a public demo server: `https://mcp-http-demo.arcade.dev/mcp` (tool `lorem`).
+- Presets **«Публичный»** and **«Локальный»** fill the endpoint and connect in one tap.
+- The endpoint is saved; `MCP_ENDPOINT` in `local.properties` sets the default.
+
+### Running the local MCP server (optional)
+
+A small demo server lives in `tools/mcp_server.py` (Python + the official MCP SDK).
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install "mcp[cli]"
+python tools/mcp_server.py
+```
+
+It starts on `http://127.0.0.1:8000/mcp` with demo tools (`add`, `multiply`, `current_time_utc`).
+From the Android emulator use `http://10.0.2.2:8000/mcp` (the app's **«Локальный»** preset).
+
+> **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
+> (DNS-rebinding protection). `tools/mcp_server.py` already listens on `0.0.0.0` and allows
+> `10.0.2.2` in `TransportSecuritySettings.allowed_hosts` — if you still get 421, make sure
+> no old server instance is holding port 8000: `lsof -ti tcp:8000 | xargs kill -9`.
+
 ## Provider examples
 
 | Provider | LLM_BASE_URL | LLM_ENDPOINT | LLM_MODEL |

@@ -52,6 +52,14 @@
     <string name="copy">Копировать</string>
     <string name="copied">Скопировано</string>
     <string name="agent_button">Чат с агентом</string>
+    <string name="mcp_button">MCP</string>
+    <string name="mcp_title">MCP</string>
+    <string name="mcp_endpoint">MCP endpoint (streamable HTTP)</string>
+    <string name="mcp_connect">Подключиться и получить инструменты</string>
+    <string name="mcp_preset_public">Публичный</string>
+    <string name="mcp_preset_local">Локальный</string>
+    <string name="mcp_connected">Подключено · протокол %1$s · инструментов: %2$d</string>
+    <string name="mcp_schema">inputSchema: JSON</string>
     <string name="agent_title">Агент</string>
     <string name="agent_clear">Очистить историю</string>
     <string name="agent_input_hint">Сообщение…</string>

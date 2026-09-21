@@ -13,6 +13,7 @@ val llmModelMedium = localProperties.getProperty("LLM_MODEL_MEDIUM", "deepseek/d
 val llmModelStrong = localProperties.getProperty("LLM_MODEL_STRONG", "z-ai/glm-5.3")
 val llmModelTest = localProperties.getProperty("LLM_MODEL_TEST", "")
 val llmContextLimit = localProperties.getProperty("LLM_CONTEXT_LIMIT", "131072")
+val mcpEndpoint = localProperties.getProperty("MCP_ENDPOINT", "")
 
 plugins {
     alias(libs.plugins.android.application)
@@ -39,6 +40,7 @@ android {
         buildConfigField("String", "LLM_MODEL_STRONG", "\"$llmModelStrong\"")
         buildConfigField("String", "LLM_MODEL_TEST", "\"$llmModelTest\"")
         buildConfigField("int", "LLM_CONTEXT_LIMIT", "$llmContextLimit")
+        buildConfigField("String", "MCP_ENDPOINT", "\"$mcpEndpoint\"")
     }
 
     buildTypes {

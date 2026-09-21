@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -29,6 +30,7 @@ import com.example.aiadventchallenge.ui.theme.AIAdventChallengeTheme
 @Composable
 fun HomeScreen(
     onOpenAgent: () -> Unit = {},
+    onOpenMcp: () -> Unit = {},
     viewModel: HomeViewModel = viewModel()
 ) {
     var apiKey by rememberSaveable { mutableStateOf("") }
@@ -72,6 +74,12 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.agent_button))
+                }
+                OutlinedButton(
+                    onClick = onOpenMcp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.mcp_button))
                 }
             }
         }
