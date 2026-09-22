@@ -81,6 +81,8 @@
     <string name="settings_invariants_guard">Страж (guard)</string>
     <string name="settings_invariants_guard_desc">После ответа отдельный LLM-вызов проверяет решение по инвариантам; при нарушении — отказ с объяснением. Можно включить/выключить в любой момент.</string>
     <string name="settings_manage_invariants">Управление инвариантами</string>
+    <string name="settings_mcp">MCP-инструменты</string>
+    <string name="settings_mcp_desc">Агент может вызывать инструменты из подключённого MCP-сервера (function calling) и использовать результат в ответе. Эндпоинт общий с экраном MCP.</string>
     <string name="invariants_title">Инварианты</string>
     <string name="invariants_hint">Правила проекта, которые ассистент не имеет права нарушать. Подмешиваются в каждый запрос; страж отказывает при нарушении.</string>
     <string name="invariants_empty">Инвариантов нет. Добавьте правило.</string>

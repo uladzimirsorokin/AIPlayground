@@ -70,7 +70,8 @@ pip install "mcp[cli]"
 python tools/mcp_server.py
 ```
 
-It starts on `http://127.0.0.1:8000/mcp` with demo tools (`add`, `multiply`, `current_time_utc`).
+It starts on `http://127.0.0.1:8000/mcp` with demo tools (`add`, `multiply`, `current_time_utc`,
+and `lorem`, which generates Lorem Ipsum through a public lorem API — same as the public demo server).
 From the Android emulator use `http://10.0.2.2:8000/mcp` (the app's **«Локальный»** preset).
 
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header

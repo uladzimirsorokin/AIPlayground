@@ -3,7 +3,11 @@ package com.example.aiadventchallenge.data.agent
 import android.util.Log
 import com.example.aiadventchallenge.BuildConfig
 import com.example.aiadventchallenge.data.ChatMessage
+import com.example.aiadventchallenge.data.ChatTool
+import com.example.aiadventchallenge.data.CompletionResult
 import com.example.aiadventchallenge.data.LlmClient
+import com.example.aiadventchallenge.data.mcp.McpClient
+import com.example.aiadventchallenge.data.mcp.McpTool
 import org.json.JSONObject
 
 /**
@@ -47,10 +51,13 @@ class ChatAgent(
     private val invariantsStore: InvariantsStore,
     private val invariantsEnabled: () -> Boolean,
     private val invariantGuardEnabled: () -> Boolean,
+    private val mcpEnabled: () -> Boolean,
+    private val mcpEndpoint: () -> String,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
     private companion object {
+        const val MAX_TOOL_ROUNDS = 5
         const val FORMAT_DESCRIPTION =
             "Отвечай строго в JSON без markdown и пояснений."
         const val SUMMARY_PROMPT =
@@ -354,6 +361,11 @@ class ChatAgent(
     private var savedTokens = 0L
 
     override suspend fun send(userMessage: String): AgentResponse {
+        val command = userMessage.trim()
+        if (command.equals("mcplist", ignoreCase = true)) {
+            return handleMcpListCommand(command)
+        }
+
         val key = apiKey() ?: throw IllegalStateException("API key is not set")
         val strat = strategy()
         val window = historyWindow()
@@ -418,21 +430,24 @@ class ChatAgent(
             }
         }
 
-        val sentChars = messages.sumOf { it.content.length }
-        savedTokens += (estimate(_history) - estimate(messages)).coerceAtLeast(0)
-
+        var sentMessages = messages
         val result = try {
-            client.completeChat(
-                messages,
-                key,
-                model = model(),
-                responseFormat = if (json) "json_object" else null,
-                temperature = temperature()
-            )
+            if (mcpEnabled() && mcpEndpoint().isNotBlank()) {
+                try {
+                    runWithMcpTools(messages, key, json) { finalMessages -> sentMessages = finalMessages }
+                } catch (e: Exception) {
+                    Log.d("AGENT", "mcp: error, fallback to plain call: ${e.message}")
+                    callModel(messages, key, json, null)
+                }
+            } else {
+                callModel(messages, key, json, null)
+            }
         } catch (e: Exception) {
             _history.removeAt(_history.size - 1)
             throw e
         }
+        val sentChars = sentMessages.sumOf { it.content.length }
+        savedTokens += (estimate(_history) - estimate(sentMessages)).coerceAtLeast(0)
         val truncated = result.promptTokens > 0 &&
             result.promptTokens < (sentChars / 3.0) * 0.6
 
@@ -457,7 +472,7 @@ class ChatAgent(
                 "total=${result.totalTokens} cost=${result.costUsd} history=${_history.size}msgs " +
                 "summary=${memory.summary.length} profile=${profile.text.length} layers=${memory.info} " +
                 "invariants=${invariants.size} task=${taskMachine.state.stage}/${taskMachine.state.step} paused=${taskMachine.paused} " +
-                "sentEst=${estimate(messages)} fullEst=${estimate(_history)} " +
+                "sentEst=${estimate(sentMessages)} fullEst=${estimate(_history)} " +
                 "saved=${stats.savedTokens} compactions=${stats.compactions} requests=${stats.requests} " +
                 "compacted=$compacted truncated=$truncated"
         )
@@ -570,4 +585,103 @@ class ChatAgent(
     }
 
     private fun estimate(messages: List<ChatMessage>): Int = messages.sumOf { it.content.length } / 3
+
+    /** Команда mcplist: список инструментов подключённого MCP-сервера (без LLM-вызова). */
+    private suspend fun handleMcpListCommand(command: String): AgentResponse {
+        _history.add(ChatMessage("user", command))
+        val reply = try {
+            val endpoint = mcpEndpoint()
+            if (endpoint.isBlank()) {
+                "MCP не настроен: эндпоинт пуст (экран MCP / local.properties)."
+            } else {
+                val conn = McpClient(endpoint).connectAndListTools()
+                if (conn.tools.isEmpty()) {
+                    "MCP ($endpoint): сервер не отдал инструментов."
+                } else {
+                    buildString {
+                        append("MCP-инструменты (${conn.tools.size}, протокол ")
+                            .append(conn.protocolVersion.ifBlank { "?" })
+                            .append("):\n")
+                        conn.tools.forEach { t ->
+                            append("- ").append(t.name)
+                            if (t.description.isNotBlank()) append(" — ").append(t.description)
+                            append("\n")
+                        }
+                        if (!mcpEnabled()) {
+                            append("\nАвтовызов инструментов в чате выключен (настройки → MCP-инструменты).")
+                        }
+                    }.trimEnd()
+                }
+            }
+        } catch (e: Exception) {
+            Log.d("AGENT", "mcp: mcplist failed: ${e.message}")
+            "MCP недоступен: ${e.message ?: "ошибка"}"
+        }
+        _history.add(ChatMessage("assistant", reply))
+        shortTermStore.save(_history)
+        Log.d("AGENT", "mcp: mcplist -> ${reply.take(120)}")
+        return AgentResponse(
+            reply = reply,
+            promptTokens = 0,
+            completionTokens = 0,
+            totalTokens = 0,
+            costUsd = 0.0,
+            stats = stats
+        )
+    }
+
+    /** Один вызов модели (с опциональными инструментами). */
+    private suspend fun callModel(
+        messages: List<ChatMessage>,
+        key: String,
+        json: Boolean,
+        tools: List<ChatTool>?
+    ): CompletionResult = client.completeChat(
+        messages,
+        key,
+        model = model(),
+        responseFormat = if (json) "json_object" else null,
+        temperature = temperature(),
+        tools = tools
+    )
+
+    /** function-calling цикл через MCP-инструменты: модель запрашивает → вызываем → результат обратно. */
+    private suspend fun runWithMcpTools(
+        messages: List<ChatMessage>,
+        key: String,
+        json: Boolean,
+        onFinalMessages: (List<ChatMessage>) -> Unit
+    ): CompletionResult {
+        val mcp = McpClient(mcpEndpoint())
+        val connection = mcp.connectAndListTools()
+        if (connection.tools.isEmpty()) return callModel(messages, key, json, null)
+        val tools = connection.tools.mapNotNull { it.toChatTool() }
+        if (tools.isEmpty()) return callModel(messages, key, json, null)
+
+        Log.d("AGENT", "mcp: tools=${tools.map { it.name }}")
+        var loopMessages = messages
+        var result = callModel(loopMessages, key, json, tools)
+        var rounds = 1
+        while (result.toolCalls.isNotEmpty() && rounds < MAX_TOOL_ROUNDS) {
+            loopMessages = loopMessages + ChatMessage("assistant", result.content, toolCalls = result.toolCalls)
+            for (tc in result.toolCalls) {
+                val toolResult = mcp.callTool(tc.name, tc.arguments)
+                Log.d("AGENT", "mcp: call ${tc.name}(${tc.arguments}) -> ${toolResult.take(140)}")
+                loopMessages = loopMessages + ChatMessage("tool", toolResult, toolCallId = tc.id)
+            }
+            result = callModel(loopMessages, key, json, tools)
+            rounds++
+        }
+        onFinalMessages(loopMessages)
+        return result
+    }
+
+    private fun McpTool.toChatTool(): ChatTool? {
+        if (name.isBlank()) return null
+        return ChatTool(
+            name = name,
+            description = description,
+            parameters = runCatching { inputSchema?.let { JSONObject(it) } }.getOrNull()
+        )
+    }
 }

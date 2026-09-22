@@ -80,6 +80,34 @@ class McpClient(private val endpoint: String) {
         )
     }
 
+    /** Вызывает инструмент и возвращает текстовый результат. */
+    suspend fun callTool(name: String, arguments: String): String = withContext(Dispatchers.IO) {
+        val resp = post(
+            JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("id", ++nextId)
+                .put("method", "tools/call")
+                .put(
+                    "params",
+                    JSONObject()
+                        .put("name", name)
+                        .put("arguments", runCatching { JSONObject(arguments) }.getOrElse { JSONObject() })
+                )
+        ) ?: throw IllegalStateException("tools/call: пустой ответ")
+
+        val content = resp.optJSONObject("result")?.optJSONArray("content") ?: JSONArray()
+        buildString {
+            for (i in 0 until content.length()) {
+                val item = content.getJSONObject(i)
+                item.optString("text", "").takeIf { it.isNotBlank() }?.let { append(it) }
+                if (item.has("json")) append(item.get("json").toString())
+            }
+        }.ifBlank {
+            val err = resp.optJSONObject("result")?.optJSONObject("isError") ?: return@withContext "ошибка инструмента"
+            err.toString()
+        }
+    }
+
     private fun post(body: JSONObject): JSONObject? {
         val connection = URL(endpoint).openConnection() as HttpURLConnection
         return try {

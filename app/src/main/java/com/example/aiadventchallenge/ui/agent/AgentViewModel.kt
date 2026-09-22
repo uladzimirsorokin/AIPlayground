@@ -44,6 +44,7 @@ data class AgentSettings(
     val taskState: Boolean,
     val invariants: Boolean,
     val invariantGuard: Boolean,
+    val mcp: Boolean,
     val team: String
 )
 
@@ -82,10 +83,15 @@ class AgentViewModel(
             taskState = prefs.getBoolean("agent_task_state", true),
             invariants = prefs.getBoolean("agent_invariants", true),
             invariantGuard = prefs.getBoolean("agent_invariants_guard", true),
+            mcp = prefs.getBoolean("agent_mcp", true),
             team = prefs.getString("agent_team", "main") ?: "main"
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
+
+    // Эндпоинт MCP общий с экраном MCP (SharedPreferences "mcp").
+    private val mcpPrefs =
+        getApplication<Application>().getSharedPreferences("mcp", Context.MODE_PRIVATE)
 
     // Краткосрочная — своя на агента; рабочая — общая на команду; долговременная — глобальная.
     private val shortTermStore = DatabaseHistoryStore(getApplication(), AGENT_ID)
@@ -113,7 +119,9 @@ class AgentViewModel(
         taskStateEnabled = { _settings.value.taskState },
         invariantsStore = invariantsStore,
         invariantsEnabled = { _settings.value.invariants },
-        invariantGuardEnabled = { _settings.value.invariantGuard }
+        invariantGuardEnabled = { _settings.value.invariantGuard },
+        mcpEnabled = { _settings.value.mcp },
+        mcpEndpoint = { mcpPrefs.getString("endpoint", null) ?: BuildConfig.MCP_ENDPOINT }
     )
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -454,6 +462,7 @@ class AgentViewModel(
             .putBoolean("agent_task_state", new.taskState)
             .putBoolean("agent_invariants", new.invariants)
             .putBoolean("agent_invariants_guard", new.invariantGuard)
+            .putBoolean("agent_mcp", new.mcp)
             .putString("agent_team", new.team)
             .apply()
         _settings.value = new

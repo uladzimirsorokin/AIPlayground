@@ -15,7 +15,23 @@ data class ChatMessage(
     val outputTokens: Int? = null,
     val model: String? = null,
     val compacted: Boolean = false,
-    val truncated: Boolean = false
+    val truncated: Boolean = false,
+    val toolCalls: List<ToolCall> = emptyList(),
+    val toolCallId: String? = null
+)
+
+/** Вызов функции, запрошенный моделью (function calling). */
+data class ToolCall(
+    val id: String,
+    val name: String,
+    val arguments: String
+)
+
+/** Определение инструмента для function calling (OpenAI-совместимый формат). */
+data class ChatTool(
+    val name: String,
+    val description: String,
+    val parameters: JSONObject?
 )
 
 data class CompletionResult(
@@ -25,7 +41,9 @@ data class CompletionResult(
     val totalTokens: Int,
     val costUsd: Double,
     val latencyMs: Long,
-    val model: String? = null
+    val model: String? = null,
+    val toolCalls: List<ToolCall> = emptyList(),
+    val finishReason: String? = null
 )
 
 /**
@@ -53,7 +71,7 @@ class LlmClient(
             systemPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             add(ChatMessage("user", userContent))
         }
-        return postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature).content
+        return postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature, null).content
     }
 
     suspend fun completeDetailed(
@@ -66,7 +84,7 @@ class LlmClient(
             systemPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             add(ChatMessage("user", prompt))
         }
-        return postChat(messages, apiKey, model, null, null, null, null)
+        return postChat(messages, apiKey, model, null, null, null, null, null)
     }
 
     suspend fun completeChat(
@@ -76,8 +94,11 @@ class LlmClient(
         maxTokens: Int? = null,
         stop: List<String>? = null,
         responseFormat: String? = null,
-        temperature: Double? = null
-    ): CompletionResult = postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature)
+        temperature: Double? = null,
+        tools: List<ChatTool>? = null
+    ): CompletionResult = postChat(
+        messages, apiKey, model, maxTokens, stop, responseFormat, temperature, tools
+    )
 
     private suspend fun postChat(
         messages: List<ChatMessage>,
@@ -86,7 +107,8 @@ class LlmClient(
         maxTokens: Int?,
         stop: List<String>?,
         responseFormat: String?,
-        temperature: Double?
+        temperature: Double?,
+        tools: List<ChatTool>?
     ): CompletionResult = withContext(Dispatchers.IO) {
         val start = System.currentTimeMillis()
         val url = URL(endpoint.ifBlank { "$baseUrl/v1/chat/completions" })
@@ -102,7 +124,27 @@ class LlmClient(
 
             val messagesArray = JSONArray()
             messages.forEach { m ->
-                messagesArray.put(JSONObject().put("role", m.role).put("content", m.content))
+                val obj = JSONObject().put("role", m.role).put("content", m.content)
+                if (m.toolCalls.isNotEmpty()) {
+                    obj.put(
+                        "tool_calls",
+                        JSONArray().apply {
+                            m.toolCalls.forEach { tc ->
+                                put(
+                                    JSONObject()
+                                        .put("id", tc.id)
+                                        .put("type", "function")
+                                        .put(
+                                            "function",
+                                            JSONObject().put("name", tc.name).put("arguments", tc.arguments)
+                                        )
+                                )
+                            }
+                        }
+                    )
+                }
+                m.toolCallId?.let { obj.put("tool_call_id", it) }
+                messagesArray.put(obj)
             }
             val body = JSONObject()
                 .put("model", model)
@@ -115,6 +157,29 @@ class LlmClient(
                             .put("enabled", false)
                     )
                 )
+            tools?.takeIf { it.isNotEmpty() }?.let { tools ->
+                body.put(
+                    "tools",
+                    JSONArray().apply {
+                        tools.forEach { t ->
+                            put(
+                                JSONObject()
+                                    .put("type", "function")
+                                    .put(
+                                        "function",
+                                        JSONObject()
+                                            .put("name", t.name)
+                                            .put("description", t.description)
+                                            .put(
+                                                "parameters",
+                                                t.parameters ?: JSONObject().put("type", "object")
+                                            )
+                                    )
+                            )
+                        }
+                    }
+                )
+            }
             maxTokens?.let { body.put("max_tokens", it) }
             stop?.let { body.put("stop", JSONArray().apply { it.forEach(::put) }) }
             responseFormat?.let { body.put("response_format", JSONObject().put("type", it)) }
@@ -130,12 +195,24 @@ class LlmClient(
             }
 
             val json = JSONObject(text)
-            val content = json
-                .getJSONArray("choices")
-                .getJSONObject(0)
-                .getJSONObject("message")
-                .getString("content")
-                .trim()
+            val choice = json.getJSONArray("choices").getJSONObject(0)
+            val message = choice.getJSONObject("message")
+            val content = message.optString("content", "").trim()
+            val toolCalls = message.optJSONArray("tool_calls")?.let { arr ->
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        val tc = arr.getJSONObject(i)
+                        val fn = tc.optJSONObject("function") ?: continue
+                        add(
+                            ToolCall(
+                                id = tc.optString("id", ""),
+                                name = fn.optString("name", ""),
+                                arguments = fn.optString("arguments", "")
+                            )
+                        )
+                    }
+                }
+            } ?: emptyList()
             val usage = json.optJSONObject("usage")
             CompletionResult(
                 content = content,
@@ -144,7 +221,9 @@ class LlmClient(
                 totalTokens = usage?.optInt("total_tokens", 0) ?: 0,
                 costUsd = usage?.optDouble("cost", 0.0) ?: 0.0,
                 latencyMs = System.currentTimeMillis() - start,
-                model = json.optString("model", null)?.takeIf { it.isNotBlank() }
+                model = json.optString("model", null)?.takeIf { it.isNotBlank() },
+                toolCalls = toolCalls,
+                finishReason = choice.optString("finish_reason", null)?.takeIf { it.isNotBlank() }
             )
         } finally {
             connection.disconnect()

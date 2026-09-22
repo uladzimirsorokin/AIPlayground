@@ -490,6 +490,29 @@ text = {
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
+                                text = stringResource(R.string.settings_mcp),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settings.mcp,
+                                onCheckedChange = { onChange(settings.copy(mcp = it)) }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_mcp_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
                                 text = stringResource(R.string.settings_invariants),
                                 style = MaterialTheme.typography.bodyMedium
                             )
