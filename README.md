@@ -71,7 +71,11 @@ python tools/mcp_server.py
 ```
 
 It starts on `http://127.0.0.1:8000/mcp` with demo tools (`add`, `multiply`, `current_time_utc`,
-and `lorem`, which generates Lorem Ipsum through a public lorem API — same as the public demo server).
+and `lorem`, which generates Lorem Ipsum through a public lorem API — same as the public demo server),
+plus a scheduler/background-tasks demo (`schedule_reminder`, `check_due_reminders`, `list_reminders`,
+`start_metrics_collector`, `stop_metrics_collector`, `get_metrics_summary`) backed by SQLite
+(`tools/mcp_scheduler.db`) — a background thread keeps ticking for as long as the server process is
+alive, independent of whether an Android client is connected.
 From the Android emulator use `http://10.0.2.2:8000/mcp` (the app's **«Локальный»** preset).
 
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header

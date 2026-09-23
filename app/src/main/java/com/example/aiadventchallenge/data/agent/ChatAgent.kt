@@ -209,6 +209,10 @@ class ChatAgent(
             memory.shortTerm = value
         }
 
+    // Поллер сработавших напоминаний: переиспользует одну MCP-сессию между тиками.
+    private var pollerMcp: McpClient? = null
+    private var pollerEndpoint: String? = null
+
     init {
         _history.addAll(shortTermStore.load())
         memory.summary = workingStore.loadSummary()
@@ -658,8 +662,19 @@ class ChatAgent(
         val tools = connection.tools.mapNotNull { it.toChatTool() }
         if (tools.isEmpty()) return callModel(messages, key, json, null)
 
+        // Сработавшие напоминания доставляются в чат принудительно: check_due_reminders
+        // вызывается в начале каждого запроса, и если что-то сработало — блок вставляется
+        // в контекст системным сообщением, чтобы модель его озвучила (не зависит от того,
+        // догадается ли она сама вызвать инструмент). once-delivery не даст задвоения.
+        var baseMessages = messages
+        runCatching {
+            dueRemindersText(mcp.callTool("check_due_reminders", "{}"))?.let {
+                baseMessages = baseMessages + ChatMessage("system", it)
+            }
+        }
+
         Log.d("AGENT", "mcp: tools=${tools.map { it.name }}")
-        var loopMessages = messages
+        var loopMessages = baseMessages
         var result = callModel(loopMessages, key, json, tools)
         var rounds = 1
         while (result.toolCalls.isNotEmpty() && rounds < MAX_TOOL_ROUNDS) {
@@ -672,8 +687,50 @@ class ChatAgent(
             result = callModel(loopMessages, key, json, tools)
             rounds++
         }
+        // Модель могла упереться в лимит раундов и закончить tool-call-ом без текста —
+        // последний запрос без tools, чтобы получить финальный ответ в чат.
+        if (result.content.isBlank()) {
+            result = callModel(loopMessages, key, json, null)
+        }
         onFinalMessages(loopMessages)
         return result
+    }
+
+    private fun dueRemindersText(raw: String): String? {
+        val fired = runCatching { JSONObject(raw).optJSONArray("fired") }.getOrNull() ?: return null
+        if (fired.length() == 0) return null
+        val lines = buildList {
+            for (i in 0 until fired.length()) {
+                val r = fired.getJSONObject(i)
+                add("- ${r.optString("text", "")} (${r.optString("due_at", "")})")
+            }
+        }
+        return "Сработавшие напоминания:\n" + lines.joinToString("\n")
+    }
+
+    /** Проактивная доставка напоминаний (День 18): опрашивает сервер и, если что-то
+     *  сработало, добавляет блок в историю системным сообщением. Возвращает текст для UI.
+     *  Никакого LLM-вызова — только check_due_reminders через переиспользуемую сессию. */
+    suspend fun pollDueReminders(): String? {
+        if (!mcpEnabled() || mcpEndpoint().isBlank()) return null
+        return try {
+            val endpoint = mcpEndpoint()
+            if (pollerMcp == null || pollerEndpoint != endpoint) {
+                pollerMcp = McpClient(endpoint)
+                pollerEndpoint = endpoint
+                pollerMcp?.connectAndListTools()
+            }
+            val due = pollerMcp?.let { dueRemindersText(it.callTool("check_due_reminders", "{}")) }
+                ?: return null
+            _history.add(ChatMessage("system", due))
+            shortTermStore.save(_history)
+            Log.d("AGENT", "mcp: delivered due reminders: ${due.take(120)}")
+            due
+        } catch (e: Exception) {
+            pollerMcp = null
+            Log.d("AGENT", "mcp: poll due reminders failed: ${e.message}")
+            null
+        }
     }
 
     private fun McpTool.toChatTool(): ChatTool? {

@@ -28,6 +28,7 @@ import com.example.aiadventchallenge.data.agent.TaskState
 import com.example.aiadventchallenge.data.agent.TaskStage
 import com.example.aiadventchallenge.data.agent.TransitionResult
 import com.example.aiadventchallenge.data.agent.UserProfile
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,6 +55,7 @@ class AgentViewModel(
 
     private companion object {
         const val AGENT_ID = "main"
+        const val REMINDER_POLL_MS = 10_000L
     }
 
     private val prefs =
@@ -481,6 +483,25 @@ class AgentViewModel(
         _branchNames.value = agent.branchNames
         _activeBranch.value = agent.activeBranch
         _longTerm.value = agent.longTermEntries
+    }
+
+    // --- Проактивная доставка напоминаний (День 18) ------------------------------
+    // Фоновый цикл опрашивает MCP-сервер, пока жив ViewModel: сработавшие
+    // напоминания (schedule_reminder) появляются в чате сами, без запроса пользователя.
+    // Пропускаем тик, пока идёт запрос к модели (её ход сам обработает доставку).
+    init {
+        Log.d("AGENT", "mcp: reminder poller started (mcpEnabled=${_settings.value.mcp}, " +
+            "endpoint=${mcpPrefs.getString("endpoint", null) ?: BuildConfig.MCP_ENDPOINT})")
+        viewModelScope.launch {
+            while (true) {
+                delay(REMINDER_POLL_MS)
+                if (_sending.value) continue
+                agent.pollDueReminders()?.let { due ->
+                    _messages.value = _messages.value + ChatMessage(role = "system", content = due)
+                    _historyTokens.value = agent.historyEstimateTokens
+                }
+            }
+        }
     }
 }
 

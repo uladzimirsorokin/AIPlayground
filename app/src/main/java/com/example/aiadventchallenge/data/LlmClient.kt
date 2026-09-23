@@ -197,7 +197,9 @@ class LlmClient(
             val json = JSONObject(text)
             val choice = json.getJSONArray("choices").getJSONObject(0)
             val message = choice.getJSONObject("message")
-            val content = message.optString("content", "").trim()
+            // content может быть JSON-null (tool-call-only ответ): optString тогда вернёт
+            // строку "null", а не "". Явно проверяем, чтобы в ответ не утекал литерал "null".
+            val content = if (message.isNull("content")) "" else message.optString("content", "").trim()
             val toolCalls = message.optJSONArray("tool_calls")?.let { arr ->
                 buildList {
                     for (i in 0 until arr.length()) {

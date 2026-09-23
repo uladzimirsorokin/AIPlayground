@@ -21,4 +21,7 @@ local.properties
 *.jks
 *.keystore
 .kotlin/
-*.md__pycache__/
+*.md
+__pycache__/
+tools/mcp_scheduler.db
+tools/mcp_scheduler.db-*
