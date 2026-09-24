@@ -25,3 +25,4 @@ local.properties
 __pycache__/
 tools/mcp_scheduler.db
 tools/mcp_scheduler.db-*
+tools/pipeline_outputs/

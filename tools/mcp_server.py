@@ -49,9 +49,13 @@ SQLite (`tools/mcp_scheduler.db`), поэтому переживают пере�
 import json
 import os
 import random
+import re
 import sqlite3
+import ssl
 import threading
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 try:
@@ -170,19 +174,46 @@ def current_time_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_HTTPS_CTX = None
+
+
+def _https_context():
+    """SSL-контекст, который работает в том числе на Homebrew Python без CA-сертификатов
+    в системном хранилище. Ищем системные CA-файлы; если не нашли — unverified (демо,
+    только публичные источники: Wikipedia/baconipsum)."""
+    global _HTTPS_CTX
+    if _HTTPS_CTX is not None:
+        return _HTTPS_CTX
+    for cafile in (
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/usr/local/etc/openssl/cert.pem",
+        "/opt/homebrew/etc/openssl/cert.pem",
+    ):
+        if os.path.exists(cafile):
+            try:
+                _HTTPS_CTX = ssl.create_default_context(cafile=cafile)
+                return _HTTPS_CTX
+            except Exception:
+                pass
+    _HTTPS_CTX = ssl._create_unverified_context()
+    return _HTTPS_CTX
+
+
 @mcp.tool()
 def lorem(word_count: int = 10) -> str:
     """Сгенерировать ровно заданное количество слов Lorem Ipsum (через публичный lorem API)."""
     import json as _json
     import math as _math
-    import urllib.request as _url
 
     try:
         # Параграф baconipsum ~20-50 слов — запрашиваем с запасом, чтобы хватило на word_count.
         paras = max(1, _math.ceil(word_count / 30))
-        with _url.urlopen(
+        with urllib.request.urlopen(
             f"https://baconipsum.com/api/?type=meat-and-filler&paras={paras}&start_with_lorem=1",
             timeout=15,
+            context=_https_context(),
         ) as resp:
             paragraphs = _json.loads(resp.read().decode())
     except Exception:
@@ -312,6 +343,199 @@ def get_metrics_summary(minutes: int = 60) -> str:
             "latest": values[-1] if values else None,
             "collector_running": state.get("collector_running") == "1",
             "collector_interval_seconds": int(float(state.get("collector_interval", "60"))),
+        },
+        ensure_ascii=False,
+    )
+
+
+# --- День 19: композиция MCP-инструментов -----------------------------------
+#
+# Три самостоятельных инструмента (search → summarize → save_to_file) образуют
+# пайплайн обработки данных. Каждый инструмент можно вызывать отдельно, а можно
+# запустить оркестратор run_pipeline, который сам выполняет цепочку на сервере:
+#   1. search(query)        — получить данные (локальная демо-база + Wikipedia);
+#   2. summarize(text)      — обработать: извлекательное резюме + статистика;
+#   3. save_to_file(..)     — сохранить результат в tools/pipeline_outputs/.
+# Передача данных между шагами идёт напрямую (возврат функции → аргумент следующей),
+# отчёт run_pipeline содержит trace шагов с in/out — это и есть проверка корректности
+# композиции. Модель может также построить цепочку сама через function-calling.
+
+_PIPELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_outputs")
+
+# Локальная демо-база знаний: работает офлайн и служит fallback, если Wikipedia недоступна.
+_DEMO_DOCS = {
+    "кофе": (
+        "Кофе — это напиток из обжаренных зёрен кофейного дерева. "
+        "Кофеин, содержащийся в кофе, является самым популярным психоактивным веществом в мире. "
+        "Считается, что кофе был впервые открыт в Эфиопии, где пастухи заметили бодрящий эффект ягод. "
+        "Современные способы приготовления включают эспрессо, фильтр, френч-пресс и аэропресс. "
+        "Кофе содержит антиоксиданты и при умеренном потреблении может снижать риск некоторых заболеваний."
+    ),
+    "python": (
+        "Python — это высокоуровневый язык программирования, созданный Гвидо ван Россумом в 1991 году. "
+        "Он отличается читаемым синтаксисом и широкой экосистемой библиотек. "
+        "Python активно используется в веб-разработке, анализе данных, машинном обучении и автоматизации. "
+        "Интерпретатор Python доступен для всех основных операционных систем."
+    ),
+    "андроид": (
+        "Android — это мобильная операционная система на базе ядра Linux, разрабатываемая компанией Google. "
+        "Она устанавливается на большинство смартфонов в мире и поддерживает приложения на Java и Kotlin. "
+        "Jetpack Compose — современный декларативный UI-фреймворк для Android-приложений. "
+        "Официальная IDE для разработки — Android Studio, а сборка проектов идёт через Gradle."
+    ),
+    "mcp": (
+        "Model Context Protocol (MCP) — открытый протокол, который соединяет AI-модели с внешними инструментами и данными. "
+        "MCP использует JSON-RPC поверх Streamable HTTP или stdio. "
+        "Сервер объявляет инструменты через tools/list, а клиент вызывает их через tools/call. "
+        "Это позволяет строить композиции из нескольких инструментов — цепочки обработки данных."
+    ),
+}
+
+
+def _wikipedia_titles(query: str, limit: int = 3) -> list:
+    """Резолвит произвольный запрос в реальные названия статей Wikipedia (opensearch)."""
+    url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode(
+        {"action": "opensearch", "search": query, "limit": limit, "format": "json"}
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "AIAdventDemo/1.0"})
+    with urllib.request.urlopen(req, timeout=8, context=_https_context()) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data[1] if len(data) > 1 else []
+
+
+def _wikipedia_extract(title: str) -> str:
+    """Текст статьи по точному названию (REST summary)."""
+    url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(title.replace(" ", "_"))
+    req = urllib.request.Request(url, headers={"User-Agent": "AIAdventDemo/1.0"})
+    with urllib.request.urlopen(req, timeout=8, context=_https_context()) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return data.get("extract") or ""
+
+
+def _search_source(query: str, limit: int) -> list:
+    """Собирает результаты из локальной демо-базы (регистронезависимо) и Wikipedia:
+    запрос резолвится через opensearch в реальное название статьи, затем берётся extract."""
+    results = []
+    q = query.strip().lower()
+    # 1) локальная демо-база: по ключу или вхождению любого слова запроса.
+    for key, text in _DEMO_DOCS.items():
+        k = key.lower()
+        if q == k or any(w in text.lower() for w in q.split()):
+            results.append({"title": key.capitalize(), "url": f"local://{key}", "extract": text})
+    # 2) Wikipedia: opensearch → REST summary. Падение сети/CA-сертификатов не фатально.
+    try:
+        for title in _wikipedia_titles(q, limit)[:max(1, limit)]:
+            extract = _wikipedia_extract(title)
+            if extract:
+                results.append(
+                    {
+                        "title": title,
+                        "url": "https://en.wikipedia.org/wiki/" + title.replace(" ", "_"),
+                        "extract": extract,
+                    }
+                )
+    except Exception as exc:
+        print(f"[search] wikipedia unavailable: {exc}", flush=True)
+    return results[:max(1, limit)]
+
+
+@mcp.tool()
+def search(query: str, limit: int = 3) -> str:
+    """Поиск по теме: возвращает JSON-массив результатов (title, url, extract), где extract —
+    полнотекстовый отрывок. Это первый шаг пайплайна: возьмите extract из результата и
+    передайте его в summarize как text. Источники: локальная демо-база и Wikipedia."""
+    return json.dumps(_search_source(query, limit), ensure_ascii=False)
+
+
+@mcp.tool()
+def summarize(text: str, max_sentences: int = 3) -> str:
+    """Извлекательное резюме текста: первые max_sentences предложений + статистика
+    (длина, число предложений, топ-слова). Второй шаг пайплайна: на вход подавайте
+    extract из search, а поле summary из результата передавайте в save_to_file как content."""
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    summary = " ".join(sentences[:max(1, max_sentences)])
+    words = re.findall(r"\w+", text.lower())
+    top = sorted(set(words), key=words.count, reverse=True)[:5]
+    return json.dumps(
+        {
+            "original_chars": len(text),
+            "original_sentences": len(sentences),
+            "summary": summary,
+            "summary_chars": len(summary),
+            "top_words": top,
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def save_to_file(filename: str, content: str) -> str:
+    """Сохраняет content в файл tools/pipeline_outputs/ (директория создаётся сама).
+    Возвращает путь, размер и число строк. Финальный шаг пайплайна: передавайте сюда
+    summary из summarize (или любой другой текст) как content."""
+    os.makedirs(_PIPELINE_DIR, exist_ok=True)
+    safe = os.path.basename(filename) or "output.txt"
+    path = os.path.join(_PIPELINE_DIR, safe)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return json.dumps(
+        {"filename": safe, "path": path, "chars": len(content), "lines": content.count("\n") + 1},
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def run_pipeline(query: str, filename: str = "pipeline_result.txt") -> str:
+    """Оркестратор пайплайна: search → summarize → save_to_file. Каждый шаг получает
+    результат предыдущего напрямую; отчёт содержит trace шагов с in/out и итоговое резюме."""
+    trace = []
+
+    # Шаг 1: получить данные.
+    search_res = json.loads(search(query))
+    if not search_res:
+        return json.dumps(
+            {"ok": False, "query": query, "reason": "ничего не найдено по запросу", "steps": trace},
+            ensure_ascii=False,
+        )
+    first = search_res[0]
+    extract = first["extract"]
+    trace.append(
+        {"step": 1, "tool": "search", "in": {"query": query}, "out": {"title": first["title"], "chars": len(extract)}}
+    )
+    print(f"[pipeline] step 1 search: {query!r} -> {len(extract)} chars", flush=True)
+
+    # Шаг 2: обработать (резюме).
+    summary_res = json.loads(summarize(extract))
+    summary = summary_res["summary"]
+    trace.append(
+        {
+            "step": 2,
+            "tool": "summarize",
+            "in": {"chars": len(extract)},
+            "out": {"summary_chars": len(summary), "top_words": summary_res["top_words"]},
+        }
+    )
+    print(f"[pipeline] step 2 summarize: {len(extract)} -> {len(summary)} chars", flush=True)
+
+    # Шаг 3: сохранить результат.
+    saved = json.loads(save_to_file(filename, summary))
+    trace.append(
+        {
+            "step": 3,
+            "tool": "save_to_file",
+            "in": {"summary_chars": len(summary)},
+            "out": {"path": saved["path"], "chars": saved["chars"], "lines": saved["lines"]},
+        }
+    )
+    print(f"[pipeline] step 3 save_to_file: {saved['path']} ({saved['chars']} chars)", flush=True)
+
+    return json.dumps(
+        {
+            "ok": True,
+            "query": query,
+            "title": first["title"],
+            "summary": summary,
+            "steps": trace,
         },
         ensure_ascii=False,
     )

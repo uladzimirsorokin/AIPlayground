@@ -76,6 +76,11 @@ plus a scheduler/background-tasks demo (`schedule_reminder`, `check_due_reminder
 `start_metrics_collector`, `stop_metrics_collector`, `get_metrics_summary`) backed by SQLite
 (`tools/mcp_scheduler.db`) — a background thread keeps ticking for as long as the server process is
 alive, independent of whether an Android client is connected.
+It also ships a composition/pipeline demo (Day 19): `search` (local demo knowledge base + Wikipedia),
+`summarize` (extractive summary + stats), `save_to_file` (writes to `tools/pipeline_outputs/`) and
+`run_pipeline`, an orchestrator that chains `search → summarize → save_to_file` server-side and returns
+a trace of each step's in/out so data flow between tools is verifiable. The model can either call
+`run_pipeline` in one shot or build the chain itself via function calling.
 From the Android emulator use `http://10.0.2.2:8000/mcp` (the app's **«Локальный»** preset).
 
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
