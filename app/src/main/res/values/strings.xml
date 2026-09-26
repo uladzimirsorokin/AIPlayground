@@ -57,7 +57,8 @@
     <string name="mcp_endpoint">MCP endpoint (streamable HTTP)</string>
     <string name="mcp_connect">Подключиться и получить инструменты</string>
     <string name="mcp_preset_public">Публичный</string>
-    <string name="mcp_preset_local">Локальный</string>
+    <string name="mcp_preset_local">Локальный 1</string>
+    <string name="mcp_preset_local2">Локальный 2</string>
     <string name="mcp_connected">Подключено · протокол %1$s · инструментов: %2$d</string>
     <string name="mcp_schema">inputSchema: JSON</string>
     <string name="agent_title">Агент</string>
@@ -82,7 +83,9 @@
     <string name="settings_invariants_guard_desc">После ответа отдельный LLM-вызов проверяет решение по инвариантам; при нарушении — отказ с объяснением. Можно включить/выключить в любой момент.</string>
     <string name="settings_manage_invariants">Управление инвариантами</string>
     <string name="settings_mcp">MCP-инструменты</string>
-    <string name="settings_mcp_desc">Агент может вызывать инструменты из подключённого MCP-сервера (function calling) и использовать результат в ответе. Эндпоинт общий с экраном MCP.</string>
+    <string name="settings_mcp_desc">Агент может вызывать инструменты из подключённых MCP-серверов (function calling) и использовать результат в ответе.</string>
+    <string name="settings_mcp_endpoints">MCP endpoints (через запятую)</string>
+    <string name="settings_mcp_endpoints_desc">Список MCP-серверов; агент сам выбирает инструмент и маршрутизирует вызовы по имени. Дефолт: основной (:8000) + заметки (:8001).</string>
     <string name="invariants_title">Инварианты</string>
     <string name="invariants_hint">Правила проекта, которые ассистент не имеет права нарушать. Подмешиваются в каждый запрос; страж отказывает при нарушении.</string>
     <string name="invariants_empty">Инвариантов нет. Добавьте правило.</string>

@@ -507,6 +507,22 @@ text = {
 
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedTextField(
+                            value = settings.mcpEndpoints,
+                            onValueChange = { onChange(settings.copy(mcpEndpoints = it)) },
+                            label = { Text(stringResource(R.string.settings_mcp_endpoints)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_mcp_endpoints_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,

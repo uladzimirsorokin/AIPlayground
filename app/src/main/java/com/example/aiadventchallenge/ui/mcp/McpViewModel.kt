@@ -20,6 +20,7 @@ class McpViewModel(
     companion object {
         const val PUBLIC_ENDPOINT = "https://mcp-http-demo.arcade.dev/mcp"
         const val LOCAL_ENDPOINT = "http://10.0.2.2:8000/mcp"
+        const val LOCAL_ENDPOINT2 = "http://10.0.2.2:8001/mcp"
     }
 
     private val prefs =

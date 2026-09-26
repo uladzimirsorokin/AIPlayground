@@ -46,6 +46,7 @@ SQLite (`tools/mcp_scheduler.db`), поэтому переживают пере�
 независимо от того, был ли в этот момент открыт чат.
 """
 
+import functools
 import json
 import os
 import random
@@ -66,6 +67,48 @@ except ModuleNotFoundError:
     from mcp.server.mcpserver import MCPServer as _MCPServer
 
 mcp = _MCPServer("AIAdventDemo")
+
+
+def _log(msg: str) -> None:
+    """Единая точка логов сервера с таймстампом UTC."""
+    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def _http_get(url: str, timeout: int = 8) -> str:
+    """GET с логом сетевого вызова: URL, размер ответа, задержка, ошибки."""
+    t0 = time.time()
+    req = urllib.request.Request(url, headers={"User-Agent": "AIAdventDemo/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_https_context()) as resp:
+            body = resp.read().decode("utf-8")
+        _log(f"[http] GET {url} -> {len(body)} bytes ({int((time.time() - t0) * 1000)}ms)")
+        return body
+    except Exception as exc:
+        _log(f"[http] GET {url} FAILED: {exc}")
+        raise
+
+
+def _tool(*deco_args, **deco_kwargs):
+    """Замена @mcp.tool(): логирует каждый вызов тула (имя, аргументы, результат, время).
+    functools.wraps сохраняет сигнатуру, поэтому schema тула строится как обычно."""
+
+    def inner(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            call = kwargs if kwargs else dict(zip(fn.__code__.co_varnames[: len(args)], args))
+            _log(f"[tool] {fn.__name__}({json.dumps(call, ensure_ascii=False)})")
+            t0 = time.time()
+            try:
+                result = fn(*args, **kwargs)
+            except Exception as exc:
+                _log(f"[tool] {fn.__name__} ERROR: {exc}")
+                raise
+            _log(f"[tool] {fn.__name__} -> {str(result)[:300]} ({int((time.time() - t0) * 1000)}ms)")
+            return result
+
+        return mcp.tool(*deco_args, **deco_kwargs)(wrapper)
+
+    return inner
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_scheduler.db")
 _DB_LOCK = threading.Lock()
@@ -146,7 +189,7 @@ def _scheduler_loop() -> None:
                 conn.commit()
                 conn.close()
         except Exception as exc:  # сервер не должен упасть из-за сбоя тика
-            print(f"[scheduler] tick error: {exc}")
+            _log(f"[scheduler] tick error: {exc}")
         time.sleep(1)
 
 
@@ -154,19 +197,19 @@ _db_init()
 threading.Thread(target=_scheduler_loop, daemon=True, name="mcp-scheduler").start()
 
 
-@mcp.tool()
+@_tool()
 def add(a: float, b: float) -> float:
     """Сложить два числа."""
     return a + b
 
 
-@mcp.tool()
+@_tool()
 def multiply(a: float, b: float) -> float:
     """Перемножить два числа."""
     return a * b
 
 
-@mcp.tool()
+@_tool()
 def current_time_utc() -> str:
     """Текущее время в UTC (ISO 8601)."""
     from datetime import datetime, timezone
@@ -201,21 +244,20 @@ def _https_context():
     return _HTTPS_CTX
 
 
-@mcp.tool()
+@_tool()
 def lorem(word_count: int = 10) -> str:
     """Сгенерировать ровно заданное количество слов Lorem Ipsum (через публичный lorem API)."""
-    import json as _json
     import math as _math
 
     try:
         # Параграф baconipsum ~20-50 слов — запрашиваем с запасом, чтобы хватило на word_count.
         paras = max(1, _math.ceil(word_count / 30))
-        with urllib.request.urlopen(
-            f"https://baconipsum.com/api/?type=meat-and-filler&paras={paras}&start_with_lorem=1",
-            timeout=15,
-            context=_https_context(),
-        ) as resp:
-            paragraphs = _json.loads(resp.read().decode())
+        paragraphs = json.loads(
+            _http_get(
+                f"https://baconipsum.com/api/?type=meat-and-filler&paras={paras}&start_with_lorem=1",
+                timeout=15,
+            )
+        )
     except Exception:
         paragraphs = ["Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor"]
     words = " ".join(paragraphs).split()
@@ -225,7 +267,7 @@ def lorem(word_count: int = 10) -> str:
     return " ".join(words[i % len(words)] for i in range(max(0, word_count)))
 
 
-@mcp.tool()
+@_tool()
 def schedule_reminder(text: str, delay_seconds: int) -> str:
     """Поставить отложенное напоминание: сохраняется в SQLite и срабатывает через
     delay_seconds секунд силами фонового потока сервера (не зависит от того,
@@ -247,7 +289,7 @@ def schedule_reminder(text: str, delay_seconds: int) -> str:
     )
 
 
-@mcp.tool()
+@_tool()
 def list_reminders(status: str = "all") -> str:
     """Список всех напоминаний (для отладки/обзора). status: all|scheduled|due|fired."""
     with _DB_LOCK:
@@ -269,7 +311,7 @@ def list_reminders(status: str = "all") -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
-@mcp.tool()
+@_tool()
 def check_due_reminders() -> str:
     """Забрать напоминания, время которых уже наступило и которые ещё не были
     доставлены — и пометить их доставленными (once-delivery, повторно не вернутся)."""
@@ -294,7 +336,7 @@ def check_due_reminders() -> str:
     return json.dumps({"fired": fired, "count": len(fired)}, ensure_ascii=False)
 
 
-@mcp.tool()
+@_tool()
 def start_metrics_collector(interval_seconds: int = 60) -> str:
     """Запустить периодический сбор данных (демо-метрика) раз в interval_seconds секунд.
     Работает фоновым потоком сервера, состояние в SQLite — переживает переподключение
@@ -309,7 +351,7 @@ def start_metrics_collector(interval_seconds: int = 60) -> str:
     return json.dumps({"status": "started", "interval_seconds": max(1, interval_seconds)})
 
 
-@mcp.tool()
+@_tool()
 def stop_metrics_collector() -> str:
     """Остановить периодический сбор данных (уже собранные точки остаются в SQLite)."""
     with _DB_LOCK:
@@ -320,7 +362,7 @@ def stop_metrics_collector() -> str:
     return json.dumps({"status": "stopped"})
 
 
-@mcp.tool()
+@_tool()
 def get_metrics_summary(minutes: int = 60) -> str:
     """Агрегированная сводка собранных метрик за последние minutes минут:
     count/avg/min/max/latest + запущен ли коллектор и с каким интервалом."""
@@ -397,18 +439,14 @@ def _wikipedia_titles(query: str, limit: int = 3) -> list:
     url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode(
         {"action": "opensearch", "search": query, "limit": limit, "format": "json"}
     )
-    req = urllib.request.Request(url, headers={"User-Agent": "AIAdventDemo/1.0"})
-    with urllib.request.urlopen(req, timeout=8, context=_https_context()) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = json.loads(_http_get(url))
     return data[1] if len(data) > 1 else []
 
 
 def _wikipedia_extract(title: str) -> str:
     """Текст статьи по точному названию (REST summary)."""
     url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(title.replace(" ", "_"))
-    req = urllib.request.Request(url, headers={"User-Agent": "AIAdventDemo/1.0"})
-    with urllib.request.urlopen(req, timeout=8, context=_https_context()) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = json.loads(_http_get(url))
     return data.get("extract") or ""
 
 
@@ -435,11 +473,11 @@ def _search_source(query: str, limit: int) -> list:
                     }
                 )
     except Exception as exc:
-        print(f"[search] wikipedia unavailable: {exc}", flush=True)
+        _log(f"[search] wikipedia unavailable: {exc}")
     return results[:max(1, limit)]
 
 
-@mcp.tool()
+@_tool()
 def search(query: str, limit: int = 3) -> str:
     """Поиск по теме: возвращает JSON-массив результатов (title, url, extract), где extract —
     полнотекстовый отрывок. Это первый шаг пайплайна: возьмите extract из результата и
@@ -447,7 +485,7 @@ def search(query: str, limit: int = 3) -> str:
     return json.dumps(_search_source(query, limit), ensure_ascii=False)
 
 
-@mcp.tool()
+@_tool()
 def summarize(text: str, max_sentences: int = 3) -> str:
     """Извлекательное резюме текста: первые max_sentences предложений + статистика
     (длина, число предложений, топ-слова). Второй шаг пайплайна: на вход подавайте
@@ -468,7 +506,7 @@ def summarize(text: str, max_sentences: int = 3) -> str:
     )
 
 
-@mcp.tool()
+@_tool()
 def save_to_file(filename: str, content: str) -> str:
     """Сохраняет content в файл tools/pipeline_outputs/ (директория создаётся сама).
     Возвращает путь, размер и число строк. Финальный шаг пайплайна: передавайте сюда
@@ -484,7 +522,7 @@ def save_to_file(filename: str, content: str) -> str:
     )
 
 
-@mcp.tool()
+@_tool()
 def run_pipeline(query: str, filename: str = "pipeline_result.txt") -> str:
     """Оркестратор пайплайна: search → summarize → save_to_file. Каждый шаг получает
     результат предыдущего напрямую; отчёт содержит trace шагов с in/out и итоговое резюме."""
@@ -502,7 +540,7 @@ def run_pipeline(query: str, filename: str = "pipeline_result.txt") -> str:
     trace.append(
         {"step": 1, "tool": "search", "in": {"query": query}, "out": {"title": first["title"], "chars": len(extract)}}
     )
-    print(f"[pipeline] step 1 search: {query!r} -> {len(extract)} chars", flush=True)
+    _log(f"[pipeline] step 1 search: {query!r} -> {len(extract)} chars")
 
     # Шаг 2: обработать (резюме).
     summary_res = json.loads(summarize(extract))
@@ -515,7 +553,7 @@ def run_pipeline(query: str, filename: str = "pipeline_result.txt") -> str:
             "out": {"summary_chars": len(summary), "top_words": summary_res["top_words"]},
         }
     )
-    print(f"[pipeline] step 2 summarize: {len(extract)} -> {len(summary)} chars", flush=True)
+    _log(f"[pipeline] step 2 summarize: {len(extract)} -> {len(summary)} chars")
 
     # Шаг 3: сохранить результат.
     saved = json.loads(save_to_file(filename, summary))
@@ -527,7 +565,7 @@ def run_pipeline(query: str, filename: str = "pipeline_result.txt") -> str:
             "out": {"path": saved["path"], "chars": saved["chars"], "lines": saved["lines"]},
         }
     )
-    print(f"[pipeline] step 3 save_to_file: {saved['path']} ({saved['chars']} chars)", flush=True)
+    _log(f"[pipeline] step 3 save_to_file: {saved['path']} ({saved['chars']} chars)")
 
     return json.dumps(
         {

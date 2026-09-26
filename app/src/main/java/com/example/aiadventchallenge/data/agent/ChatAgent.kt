@@ -52,12 +52,12 @@ class ChatAgent(
     private val invariantsEnabled: () -> Boolean,
     private val invariantGuardEnabled: () -> Boolean,
     private val mcpEnabled: () -> Boolean,
-    private val mcpEndpoint: () -> String,
+    private val mcpEndpoints: () -> List<String>,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
     private companion object {
-        const val MAX_TOOL_ROUNDS = 5
+        const val MAX_TOOL_ROUNDS = 10
         const val FORMAT_DESCRIPTION =
             "Отвечай строго в JSON без markdown и пояснений."
         const val SUMMARY_PROMPT =
@@ -209,9 +209,12 @@ class ChatAgent(
             memory.shortTerm = value
         }
 
-    // Поллер сработавших напоминаний: переиспользует одну MCP-сессию между тиками.
-    private var pollerMcp: McpClient? = null
-    private var pollerEndpoint: String? = null
+    // Поллер сработавших напоминаний: переиспользует сессии между тиками по каждому серверу.
+    private val pollerClients = mutableMapOf<String, McpClient>()
+    private val pollerTools = mutableMapOf<String, Set<String>>()
+
+    /** Нормализованный список эндпоинтов MCP (без пустых и дублей). */
+    private fun mcpEndpointsList(): List<String> = mcpEndpoints().filter { it.isNotBlank() }.distinct()
 
     init {
         _history.addAll(shortTermStore.load())
@@ -436,7 +439,7 @@ class ChatAgent(
 
         var sentMessages = messages
         val result = try {
-            if (mcpEnabled() && mcpEndpoint().isNotBlank()) {
+            if (mcpEnabled() && mcpEndpointsList().isNotEmpty()) {
                 try {
                     runWithMcpTools(messages, key, json) { finalMessages -> sentMessages = finalMessages }
                 } catch (e: Exception) {
@@ -590,32 +593,35 @@ class ChatAgent(
 
     private fun estimate(messages: List<ChatMessage>): Int = messages.sumOf { it.content.length } / 3
 
-    /** Команда mcplist: список инструментов подключённого MCP-сервера (без LLM-вызова). */
+    /** Команда mcplist: список инструментов всех подключённых MCP-серверов (без LLM-вызова). */
     private suspend fun handleMcpListCommand(command: String): AgentResponse {
         _history.add(ChatMessage("user", command))
         val reply = try {
-            val endpoint = mcpEndpoint()
-            if (endpoint.isBlank()) {
-                "MCP не настроен: эндпоинт пуст (экран MCP / local.properties)."
+            val endpoints = mcpEndpointsList()
+            if (endpoints.isEmpty()) {
+                "MCP не настроен: список эндпоинтов пуст (настройки агента / local.properties)."
             } else {
-                val conn = McpClient(endpoint).connectAndListTools()
-                if (conn.tools.isEmpty()) {
-                    "MCP ($endpoint): сервер не отдал инструментов."
-                } else {
-                    buildString {
-                        append("MCP-инструменты (${conn.tools.size}, протокол ")
-                            .append(conn.protocolVersion.ifBlank { "?" })
-                            .append("):\n")
-                        conn.tools.forEach { t ->
-                            append("- ").append(t.name)
-                            if (t.description.isNotBlank()) append(" — ").append(t.description)
-                            append("\n")
+                buildString {
+                    endpoints.forEachIndexed { i, ep ->
+                        if (i > 0) append("\n\n")
+                        val conn = McpClient(ep).connectAndListTools()
+                        if (conn.tools.isEmpty()) {
+                            append("MCP [$ep]: сервер не отдал инструментов.")
+                        } else {
+                            append("MCP [").append(ep).append("] (протокол ")
+                                .append(conn.protocolVersion.ifBlank { "?" })
+                                .append("):\n")
+                            conn.tools.forEach { t ->
+                                append("- ").append(t.name)
+                                if (t.description.isNotBlank()) append(" — ").append(t.description)
+                                append("\n")
+                            }
                         }
-                        if (!mcpEnabled()) {
-                            append("\nАвтовызов инструментов в чате выключен (настройки → MCP-инструменты).")
-                        }
-                    }.trimEnd()
-                }
+                    }
+                    if (!mcpEnabled()) {
+                        append("\nАвтовызов инструментов в чате выключен (настройки → MCP-инструменты).")
+                    }
+                }.trimEnd()
             }
         } catch (e: Exception) {
             Log.d("AGENT", "mcp: mcplist failed: ${e.message}")
@@ -649,39 +655,71 @@ class ChatAgent(
         tools = tools
     )
 
-    /** function-calling цикл через MCP-инструменты: модель запрашивает → вызываем → результат обратно. */
+    /** function-calling цикл через несколько MCP-серверов (День 20): подключаемся ко всем
+     *  эндпоинтам, агрегируем инструменты (имя → сервер) и маршрутизируем вызовы по имени. */
     private suspend fun runWithMcpTools(
         messages: List<ChatMessage>,
         key: String,
         json: Boolean,
         onFinalMessages: (List<ChatMessage>) -> Unit
     ): CompletionResult {
-        val mcp = McpClient(mcpEndpoint())
-        val connection = mcp.connectAndListTools()
-        if (connection.tools.isEmpty()) return callModel(messages, key, json, null)
-        val tools = connection.tools.mapNotNull { it.toChatTool() }
-        if (tools.isEmpty()) return callModel(messages, key, json, null)
+        val endpoints = mcpEndpointsList()
+        if (endpoints.isEmpty()) return callModel(messages, key, json, null)
 
-        // Сработавшие напоминания доставляются в чат принудительно: check_due_reminders
-        // вызывается в начале каждого запроса, и если что-то сработало — блок вставляется
-        // в контекст системным сообщением, чтобы модель его озвучила (не зависит от того,
-        // догадается ли она сама вызвать инструмент). once-delivery не даст задвоения.
-        var baseMessages = messages
-        runCatching {
-            dueRemindersText(mcp.callTool("check_due_reminders", "{}"))?.let {
-                baseMessages = baseMessages + ChatMessage("system", it)
+        // Агрегация: имя инструмента → клиент и сервер, с которого он пришёл.
+        val clientOf = mutableMapOf<String, McpClient>()
+        val serverOf = mutableMapOf<String, String>()
+        val tools = mutableListOf<ChatTool>()
+        for (ep in endpoints) {
+            val mcp = McpClient(ep)
+            val conn = runCatching { mcp.connectAndListTools() }.getOrNull()
+            if (conn == null || conn.tools.isEmpty()) continue
+            for (t in conn.tools) {
+                val ct = t.toChatTool() ?: continue
+                if (clientOf.containsKey(ct.name)) continue // дубль имени — берём первый сервер
+                clientOf[ct.name] = mcp
+                serverOf[ct.name] = ep
+                tools.add(ct)
             }
         }
+        if (tools.isEmpty()) return callModel(messages, key, json, null)
+        Log.d("AGENT", "mcp: servers=${endpoints} tools=${tools.map { it.name }}")
 
-        Log.d("AGENT", "mcp: tools=${tools.map { it.name }}")
+        // Сработавшие напоминания доставляются в чат принудительно: check_due_reminders
+        // вызывается в начале каждого запроса у каждого сервера, где такой инструмент есть,
+        // и блок вставляется в контекст системным сообщением (once-delivery не даст задвоения).
+        var baseMessages = messages
+        for ((name, mcp) in clientOf) {
+            if (name == "check_due_reminders") {
+                runCatching {
+                    dueRemindersText(mcp.callTool("check_due_reminders", "{}"))?.let {
+                        baseMessages = baseMessages + ChatMessage("system", it)
+                    }
+                }
+            }
+        }
+        // Напоминание модели: после цепочки MCP-вызовов она иногда отделывается кратким
+        // «готово» (out=~20 токенов) и не показывает результат. Просим полный ответ.
+        baseMessages = baseMessages + ChatMessage(
+            "system",
+            "Тебе доступны MCP-инструменты с нескольких серверов; для задачи может понадобиться " +
+                "цепочка вызовов. В конце ОБЯЗАТЕЛЬНО дай пользователю полный ответ на русском со всеми " +
+                "результатами инструментов (текст/содержимое, id, пути), а не просто «готово»."
+        )
+
         var loopMessages = baseMessages
         var result = callModel(loopMessages, key, json, tools)
         var rounds = 1
         while (result.toolCalls.isNotEmpty() && rounds < MAX_TOOL_ROUNDS) {
             loopMessages = loopMessages + ChatMessage("assistant", result.content, toolCalls = result.toolCalls)
             for (tc in result.toolCalls) {
-                val toolResult = mcp.callTool(tc.name, tc.arguments)
-                Log.d("AGENT", "mcp: call ${tc.name}(${tc.arguments}) -> ${toolResult.take(140)}")
+                val mcp = clientOf[tc.name]
+                val toolResult = if (mcp != null) {
+                    mcp.callTool(tc.name, tc.arguments)
+                } else {
+                    "инструмент не найден ни на одном MCP-сервере: ${tc.name}"
+                }
+                Log.d("AGENT", "mcp: [${serverOf[tc.name]}] call ${tc.name}(${tc.arguments}) -> ${toolResult.take(140)}")
                 loopMessages = loopMessages + ChatMessage("tool", toolResult, toolCallId = tc.id)
             }
             result = callModel(loopMessages, key, json, tools)
@@ -691,6 +729,15 @@ class ChatAgent(
         // последний запрос без tools, чтобы получить финальный ответ в чат.
         if (result.content.isBlank()) {
             result = callModel(loopMessages, key, json, null)
+        }
+        // Если модель так и не дала текстовый ответ — показываем хотя бы последний
+        // результат инструмента, чтобы в чат не ушёл пустой пузырь.
+        if (result.content.isBlank()) {
+            val lastTool = loopMessages.lastOrNull { it.role == "tool" }?.content
+            val fallback = lastTool?.takeIf { it.isNotBlank() }
+                ?.let { "Инструменты отработали. Результат последнего вызова:\n$it" }
+                ?: "Инструменты MCP отработали, но модель не дала текстовый ответ."
+            result = result.copy(content = fallback)
         }
         onFinalMessages(loopMessages)
         return result
@@ -708,29 +755,36 @@ class ChatAgent(
         return "Сработавшие напоминания:\n" + lines.joinToString("\n")
     }
 
-    /** Проактивная доставка напоминаний (День 18): опрашивает сервер и, если что-то
-     *  сработало, добавляет блок в историю системным сообщением. Возвращает текст для UI.
-     *  Никакого LLM-вызова — только check_due_reminders через переиспользуемую сессию. */
+    /** Проактивная доставка напоминаний (День 18): опрашивает все подключённые серверы и,
+     *  если что-то сработало, добавляет блок в историю системным сообщением. Возвращает текст
+     *  для UI. Никакого LLM-вызова — только check_due_reminders через переиспользуемые сессии. */
     suspend fun pollDueReminders(): String? {
-        if (!mcpEnabled() || mcpEndpoint().isBlank()) return null
-        return try {
-            val endpoint = mcpEndpoint()
-            if (pollerMcp == null || pollerEndpoint != endpoint) {
-                pollerMcp = McpClient(endpoint)
-                pollerEndpoint = endpoint
-                pollerMcp?.connectAndListTools()
+        if (!mcpEnabled()) return null
+        val endpoints = mcpEndpointsList()
+        if (endpoints.isEmpty()) return null
+        val delivered = StringBuilder()
+        for (ep in endpoints) {
+            try {
+                val mcp = pollerClients[ep] ?: McpClient(ep).also { pollerClients[ep] = it }
+                if (pollerTools[ep] == null) {
+                    pollerTools[ep] = mcp.connectAndListTools().tools.map { it.name }.toSet()
+                }
+                if ("check_due_reminders" !in (pollerTools[ep] ?: emptySet())) continue
+                dueRemindersText(mcp.callTool("check_due_reminders", "{}"))?.let {
+                    if (delivered.isNotEmpty()) delivered.append("\n")
+                    delivered.append(it)
+                }
+            } catch (e: Exception) {
+                pollerClients.remove(ep)
+                pollerTools.remove(ep)
+                Log.d("AGENT", "mcp: poll [$ep] failed: ${e.message}")
             }
-            val due = pollerMcp?.let { dueRemindersText(it.callTool("check_due_reminders", "{}")) }
-                ?: return null
-            _history.add(ChatMessage("system", due))
-            shortTermStore.save(_history)
-            Log.d("AGENT", "mcp: delivered due reminders: ${due.take(120)}")
-            due
-        } catch (e: Exception) {
-            pollerMcp = null
-            Log.d("AGENT", "mcp: poll due reminders failed: ${e.message}")
-            null
         }
+        val text = delivered.toString().takeIf { it.isNotBlank() } ?: return null
+        _history.add(ChatMessage("system", text))
+        shortTermStore.save(_history)
+        Log.d("AGENT", "mcp: delivered due reminders: ${text.take(120)}")
+        return text
     }
 
     private fun McpTool.toChatTool(): ChatTool? {

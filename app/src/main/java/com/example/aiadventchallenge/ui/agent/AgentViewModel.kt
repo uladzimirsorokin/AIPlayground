@@ -46,7 +46,8 @@ data class AgentSettings(
     val invariants: Boolean,
     val invariantGuard: Boolean,
     val mcp: Boolean,
-    val team: String
+    val team: String,
+    val mcpEndpoints: String
 )
 
 class AgentViewModel(
@@ -56,10 +57,16 @@ class AgentViewModel(
     private companion object {
         const val AGENT_ID = "main"
         const val REMINDER_POLL_MS = 10_000L
+        const val DEFAULT_ENDPOINT1 = "http://10.0.2.2:8000/mcp"
     }
 
     private val prefs =
         getApplication<Application>().getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    // Эндпоинт MCP общий с экраном MCP (SharedPreferences "mcp"). Объявлен до _settings,
+    // т.к. инициализатор _settings вызывает readMcpEndpoints().
+    private val mcpPrefs =
+        getApplication<Application>().getSharedPreferences("mcp", Context.MODE_PRIVATE)
 
     val availableModels: List<String> = listOf(
         BuildConfig.LLM_MODEL,
@@ -86,14 +93,11 @@ class AgentViewModel(
             invariants = prefs.getBoolean("agent_invariants", true),
             invariantGuard = prefs.getBoolean("agent_invariants_guard", true),
             mcp = prefs.getBoolean("agent_mcp", true),
-            team = prefs.getString("agent_team", "main") ?: "main"
+            team = prefs.getString("agent_team", "main") ?: "main",
+            mcpEndpoints = readMcpEndpoints().joinToString(", ")
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
-
-    // Эндпоинт MCP общий с экраном MCP (SharedPreferences "mcp").
-    private val mcpPrefs =
-        getApplication<Application>().getSharedPreferences("mcp", Context.MODE_PRIVATE)
 
     // Краткосрочная — своя на агента; рабочая — общая на команду; долговременная — глобальная.
     private val shortTermStore = DatabaseHistoryStore(getApplication(), AGENT_ID)
@@ -123,8 +127,19 @@ class AgentViewModel(
         invariantsEnabled = { _settings.value.invariants },
         invariantGuardEnabled = { _settings.value.invariantGuard },
         mcpEnabled = { _settings.value.mcp },
-        mcpEndpoint = { mcpPrefs.getString("endpoint", null) ?: BuildConfig.MCP_ENDPOINT }
+        mcpEndpoints = { readMcpEndpoints() }
     )
+
+    /** Список эндпоинтов MCP: настройка "endpoints" (через запятую) в SharedPreferences "mcp",
+     *  иначе дефолт — оба локальных демо-сервера (основной :8000 + заметки :8001).
+     *  Не связан с полем "endpoint" экрана MCP, чтобы тесты там не ломали конфиг агента. */
+    private fun readMcpEndpoints(): List<String> {
+        val raw = mcpPrefs.getString("endpoints", null)?.trim()
+        if (!raw.isNullOrBlank()) {
+            return raw.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        }
+        return listOf(DEFAULT_ENDPOINT1, BuildConfig.MCP_ENDPOINT2).filter { it.isNotBlank() }
+    }
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
@@ -467,6 +482,10 @@ class AgentViewModel(
             .putBoolean("agent_mcp", new.mcp)
             .putString("agent_team", new.team)
             .apply()
+        // Список MCP-эндпоинтов хранится в префсах "mcp" (общих с экраном MCP).
+        if (new.mcpEndpoints != _settings.value.mcpEndpoints) {
+            mcpPrefs.edit().putString("endpoints", new.mcpEndpoints.trim()).apply()
+        }
         _settings.value = new
         // Смена команды = смена скоупа рабочей памяти: перечитываем её из стора новой команды.
         if (teamChanged) agent.reloadWorkingMemory()
@@ -491,7 +510,7 @@ class AgentViewModel(
     // Пропускаем тик, пока идёт запрос к модели (её ход сам обработает доставку).
     init {
         Log.d("AGENT", "mcp: reminder poller started (mcpEnabled=${_settings.value.mcp}, " +
-            "endpoint=${mcpPrefs.getString("endpoint", null) ?: BuildConfig.MCP_ENDPOINT})")
+            "endpoints=${readMcpEndpoints()})")
         viewModelScope.launch {
             while (true) {
                 delay(REMINDER_POLL_MS)

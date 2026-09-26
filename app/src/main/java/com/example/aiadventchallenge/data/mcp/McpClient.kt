@@ -24,7 +24,7 @@ data class McpConnection(
     val tools: List<McpTool>
 )
 
-class McpClient(private val endpoint: String) {
+class McpClient(val endpoint: String) {
 
     private var sessionId: String? = null
     private var nextId = 0

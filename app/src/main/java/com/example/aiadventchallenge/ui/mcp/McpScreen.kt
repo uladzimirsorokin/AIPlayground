@@ -97,6 +97,15 @@ fun McpScreen(
                 ) {
                     Text(stringResource(R.string.mcp_preset_local))
                 }
+                OutlinedButton(
+                    onClick = {
+                        viewModel.setEndpoint(McpViewModel.LOCAL_ENDPOINT2)
+                        viewModel.connect()
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.mcp_preset_local2))
+                }
             }
             Button(
                 onClick = viewModel::connect,

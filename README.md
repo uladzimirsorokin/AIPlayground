@@ -83,6 +83,16 @@ a trace of each step's in/out so data flow between tools is verifiable. The mode
 `run_pipeline` in one shot or build the chain itself via function calling.
 From the Android emulator use `http://10.0.2.2:8000/mcp` (the app's **«Локальный»** preset).
 
+### Multi-server orchestration (Day 20)
+
+A second local server `tools/mcp_server2.py` (notes: `note_save`, `note_list`, `note_find`,
+`note_delete`, SQLite `tools/mcp_notes.db`) runs on `http://127.0.0.1:8001/mcp`. Start both servers
+and the agent connects to **all** endpoints from the settings field «MCP endpoints (через запятую)»
+(defaults: `MCP_ENDPOINT` + `MCP_ENDPOINT2` from `local.properties`), aggregates their tools into one
+function-calling list and routes each `tools/call` to the right server by tool name. Logs show the
+routing: `mcp: servers=[...]` and `mcp: [<url>] call name(...)`. A long cross-server flow:
+`search` + `summarize` (server 1) → `note_save` → `note_find` (server 2).
+
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
 > (DNS-rebinding protection). `tools/mcp_server.py` already listens on `0.0.0.0` and allows
 > `10.0.2.2` in `TransportSecuritySettings.allowed_hosts` — if you still get 421, make sure
