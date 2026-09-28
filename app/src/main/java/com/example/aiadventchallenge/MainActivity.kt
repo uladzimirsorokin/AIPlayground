@@ -15,6 +15,7 @@ import com.example.aiadventchallenge.ui.agent.AgentScreen
 import com.example.aiadventchallenge.ui.agent.ProfileScreen
 import com.example.aiadventchallenge.ui.home.HomeScreen
 import com.example.aiadventchallenge.ui.mcp.McpScreen
+import com.example.aiadventchallenge.ui.rag.RagScreen
 import com.example.aiadventchallenge.ui.theme.AIAdventChallengeTheme
 
 class MainActivity : ComponentActivity() {
@@ -32,7 +33,8 @@ class MainActivity : ComponentActivity() {
                         composable("home") {
                             HomeScreen(
                                 onOpenAgent = { navController.navigate("agent") },
-                                onOpenMcp = { navController.navigate("mcp") }
+                                onOpenMcp = { navController.navigate("mcp") },
+                                onOpenRag = { navController.navigate("rag") }
                             )
                         }
                         composable("agent") {
@@ -46,6 +48,9 @@ class MainActivity : ComponentActivity() {
                         }
                         composable("mcp") {
                             McpScreen(onBack = { navController.popBackStack() })
+                        }
+                        composable("rag") {
+                            RagScreen(onBack = { navController.popBackStack() })
                         }
                     }
                 }

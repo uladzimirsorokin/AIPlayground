@@ -93,6 +93,26 @@ function-calling list and routes each `tools/call` to the right server by tool n
 routing: `mcp: servers=[...]` and `mcp: [<url>] call name(...)`. A long cross-server flow:
 `search` + `summarize` (server 1) → `note_save` → `note_find` (server 2).
 
+### Local document indexing (Day 21)
+
+`tools/document_indexer.py` builds a local index over a document corpus (README, AGENTS.md,
+`tools/docs/*.md` articles, source code, or any `tools/<subfolder>`), with two chunking strategies:
+`fixed` (150 tokens, 30 overlap) and `structure` (markdown sections by headings / code by files).
+Embeddings are produced by a **local ollama `nomic-embed-text`** (768-dim dense vectors; TF-IDF is
+available with `--embedding tfidf`). The index (chunks + metadata + vectors) is stored as JSON in
+`tools/index/` (gitignored). Each chunk carries `chunk_id`, `source`, `title`, `section`, `tokens`,
+`chars`. Search is cosine similarity.
+
+```bash
+python tools/document_indexer.py --source docs --embedding ollama   # build + comparison report
+python tools/document_indexer.py --search "query" --strategy structure
+```
+
+The app has a **RAG screen** (route `rag`, button on the home screen, like MCP): enter the
+`tools/<subfolder>` path, pick a chunking strategy, tap «Проиндексировать» (embeddings via local
+ollama), then «Статус» to see built indexes and search. The screen calls MCP tools `index_build`,
+`index_status`, `index_search` on the main local server (needs it running + ollama up).
+
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
 > (DNS-rebinding protection). `tools/mcp_server.py` already listens on `0.0.0.0` and allows
 > `10.0.2.2` in `TransportSecuritySettings.allowed_hosts` — if you still get 421, make sure

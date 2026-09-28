@@ -28,3 +28,4 @@ tools/mcp_scheduler.db-*
 tools/pipeline_outputs/
 tools/mcp_notes.db
 tools/mcp_notes.db-*
+tools/index/

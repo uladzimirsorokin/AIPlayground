@@ -31,6 +31,7 @@ import com.example.aiadventchallenge.ui.theme.AIAdventChallengeTheme
 fun HomeScreen(
     onOpenAgent: () -> Unit = {},
     onOpenMcp: () -> Unit = {},
+    onOpenRag: () -> Unit = {},
     viewModel: HomeViewModel = viewModel()
 ) {
     var apiKey by rememberSaveable { mutableStateOf("") }
@@ -80,6 +81,12 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.mcp_button))
+                }
+                OutlinedButton(
+                    onClick = onOpenRag,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.rag_button))
                 }
             }
         }

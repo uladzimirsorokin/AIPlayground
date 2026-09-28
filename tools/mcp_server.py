@@ -58,6 +58,14 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from typing import Annotated, Literal
+
+try:
+    from pydantic import Field as _Field
+except ImportError:  # pragma: no cover
+    _Field = None  # mcp 1.x может не тянуть pydantic
+
+import document_indexer as _di  # локальная индексация документов (День 21 / RAG)
 
 try:
     # mcp 1.x
@@ -577,6 +585,99 @@ def run_pipeline(query: str, filename: str = "pipeline_result.txt") -> str:
         },
         ensure_ascii=False,
     )
+
+
+# --- День 21 (RAG): индексация документов ----------------------------------
+# Инструменты поверх tools/document_indexer.py: построить индекс (чанькинг +
+# эмбеддинги через локальный ollama nomic-embed-text), посмотреть статус и поискать.
+# Индексы сохраняются в tools/index/ (gitignored).
+
+
+@_tool()
+def index_build(
+    source: Annotated[str, _Field(description="ОБЯЗАТЕЛЬНО: подпапка в tools/, как просил пользователь, например 'docs/DnD' (или 'all' — весь проект)")],
+    strategy: Annotated[Literal["fixed", "structure"], _Field(description="ОБЯЗАТЕЛЬНО: стратегия чанкинга, как просил пользователь: fixed (равные куски) или structure (по заголовкам/файлам)")],
+    embedding: Annotated[Literal["ollama", "tfidf"], _Field(description="тип эмбеддингов")],
+    chunk_size: Annotated[int, _Field(description="ОБЯЗАТЕЛЬНО: размер чанка в токенах, как просил пользователь", ge=1)],
+    overlap: Annotated[int, _Field(description="ОБЯЗАТЕЛЬНО: перекрытие чанков в токенах, как просил пользователь", ge=0)],
+) -> str:
+    """Построить локальный RAG-индекс для подпапки tools/<source> (или 'all' — весь проект).
+    ВЫЗЫВАЙ ЭТОТ ИНСТРУМЕНТ, когда пользователь просит «проиндексировать/построить модель/индекс
+    по папке». source — папка из запроса (например 'docs/DnD'), strategy — fixed|structure,
+    chunk_size/overlap — размер и перекрытие из запроса. Эмбеддинги: ollama (nomic-embed-text) | tfidf.
+    Индекс сохраняется в tools/index/index_<source>_<strategy>_<embedding>.json."""
+    params = {"size": max(1, chunk_size), "overlap": max(0, overlap), "max_section": 400}
+    try:
+        idx = _di.build_index(strategy, params, source, embedding)
+    except Exception as exc:
+        _log(f"[rag] index_build failed: {exc}")
+        return json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False)
+    path = _di.save_index(idx)
+    return json.dumps(
+        {
+            "ok": True,
+            "path": path,
+            "source": idx["source"],
+            "strategy": idx["strategy"],
+            "embedding": idx["embedding_model"],
+            "dim": idx["embedding_dim"],
+            "documents": idx["corpus"]["documents"],
+            "chars": idx["corpus"]["chars"],
+            "chunks": len(idx["chunks"]),
+        },
+        ensure_ascii=False,
+    )
+
+
+@_tool()
+def index_status() -> str:
+    """Список построенных RAG-индексов в tools/index/ с метаданными (source, strategy, модель, число чанков)."""
+    items = []
+    if os.path.isdir(_di.INDEX_DIR):
+        for fname in sorted(os.listdir(_di.INDEX_DIR)):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(_di.INDEX_DIR, fname), encoding="utf-8") as f:
+                    idx = json.load(f)
+                items.append(
+                    {
+                        "file": fname,
+                        "source": idx.get("source"),
+                        "strategy": idx.get("strategy"),
+                        "embedding": idx.get("embedding_model"),
+                        "chunks": len(idx.get("chunks", [])),
+                        "documents": idx.get("corpus", {}).get("documents"),
+                        "built_at": idx.get("built_at"),
+                    }
+                )
+            except Exception:
+                continue
+    return json.dumps(items, ensure_ascii=False)
+
+
+@_tool()
+def index_search(
+    query: Annotated[str, _Field(description="поисковый запрос")],
+    source: Annotated[str, _Field(description="ОБЯЗАТЕЛЬНО: та же подпапка в tools/, что в index_build")],
+    strategy: Annotated[Literal["fixed", "structure"], _Field(description="ОБЯЗАТЕЛЬНО: та же стратегия, которой построен индекс")],
+    top_k: Annotated[int, _Field(description="сколько чанков вернуть", ge=1)] = 3,
+) -> str:
+    """Поиск по построенному RAG-индексу. strategy ДОЛЖНА совпадать со стратегией, которой индекс
+    был построен (если построен fixed — ищи fixed). Если пользователь просил построить индекс
+    с конкретными параметрами — сначала вызови index_build с ними, потом index_search с той же strategy.
+    Возвращает топ чанков: score, source, section, snippet."""
+    path = _di.index_path(source, strategy, "ollama")
+    if not os.path.exists(path):
+        return json.dumps(
+            {"ok": False, "reason": f"индекс не найден: {path}. Сначала вызовите index_build с той же strategy."},
+            ensure_ascii=False,
+        )
+    idx = _di.load_index(source, strategy, "ollama")
+    results = []
+    for score, meta in _di.search(idx, query, max(1, top_k)):
+        results.append({"score": score, **meta})
+    return json.dumps({"ok": True, "query": query, "results": results}, ensure_ascii=False)
 
 
 if __name__ == "__main__":
