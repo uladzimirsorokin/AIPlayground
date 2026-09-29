@@ -529,6 +529,42 @@ text = {
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
+                                text = stringResource(R.string.settings_rag),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settings.ragEnabled,
+                                onCheckedChange = { onChange(settings.copy(ragEnabled = it)) }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_rag_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (settings.ragEnabled) {
+                            OutlinedTextField(
+                                value = settings.ragSource,
+                                onValueChange = { onChange(settings.copy(ragSource = it)) },
+                                label = { Text(stringResource(R.string.settings_rag_source)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            RagStrategyDropdown(
+                                selected = settings.ragStrategy,
+                                onSelect = { onChange(settings.copy(ragStrategy = it)) }
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
                                 text = stringResource(R.string.settings_invariants),
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -1000,6 +1036,30 @@ private fun ModelDropdown(
                     text = { Text(model, maxLines = 1) },
                     onClick = {
                         onSelect(model)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RagStrategyDropdown(
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.settings_rag_strategy, selected), maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            listOf("fixed", "structure").forEach { s ->
+                DropdownMenuItem(
+                    text = { Text(s, maxLines = 1) },
+                    onClick = {
+                        onSelect(s)
                         expanded = false
                     }
                 )

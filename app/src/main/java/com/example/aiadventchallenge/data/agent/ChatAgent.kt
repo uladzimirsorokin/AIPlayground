@@ -53,6 +53,9 @@ class ChatAgent(
     private val invariantGuardEnabled: () -> Boolean,
     private val mcpEnabled: () -> Boolean,
     private val mcpEndpoints: () -> List<String>,
+    private val ragEnabled: () -> Boolean,
+    private val ragSource: () -> String,
+    private val ragStrategy: () -> String,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
@@ -372,6 +375,9 @@ class ChatAgent(
         if (command.equals("mcplist", ignoreCase = true)) {
             return handleMcpListCommand(command)
         }
+        if (command.startsWith("ragtest", ignoreCase = true)) {
+            return handleRagTest(command.removePrefix("ragtest").removePrefix(":").trim())
+        }
 
         val key = apiKey() ?: throw IllegalStateException("API key is not set")
         val strat = strategy()
@@ -400,6 +406,9 @@ class ChatAgent(
             workingStore.saveFacts(memory.facts)
         }
 
+        // RAG-контекст (День 22): релевантные чанки из индекса подмешиваются в запрос.
+        val ragContext = buildRagContext(userMessage)
+
         val messages = buildList {
             systemPrompt().takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             // Профиль пользователя подмешивается в каждый запрос.
@@ -416,6 +425,8 @@ class ChatAgent(
             if (taskStateEnabled()) {
                 taskMachine.summaryText.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             }
+            // RAG: контекст из базы знаний (День 22).
+            ragContext?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             when (strat) {
                 ContextStrategy.SLIDING_WINDOW ->
                     _history.takeLast(window).forEach { add(it) }
@@ -640,6 +651,74 @@ class ChatAgent(
         )
     }
 
+    /** Команда ragtest: сравнение ответа на один вопрос без RAG и с RAG (День 22). */
+    private suspend fun handleRagTest(query: String): AgentResponse {
+        val q = query.ifBlank { "тестовый вопрос" }
+        val key = apiKey() ?: throw IllegalStateException("API key is not set")
+        _history.add(ChatMessage("user", "ragtest: $q"))
+
+        val base = buildList {
+            systemPrompt().takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+        }
+        val userMsg = ChatMessage("user", q)
+        var totalIn = 0
+        var totalOut = 0
+        var totalAll = 0
+        var cost = 0.0
+
+        val without = try {
+            val r = callModel(base + userMsg, key, jsonFormat(), null)
+            totalIn += r.promptTokens; totalOut += r.completionTokens
+            totalAll += r.totalTokens; cost += r.costUsd
+            r.content
+        } catch (e: Exception) {
+            "ошибка: ${e.message}"
+        }
+
+        val context = buildRagContext(q, force = true)
+        val with = if (context != null) {
+            try {
+                val r = callModel(base + ChatMessage("system", context) + userMsg, key, jsonFormat(), null)
+                totalIn += r.promptTokens; totalOut += r.completionTokens
+                totalAll += r.totalTokens; cost += r.costUsd
+                r.content
+            } catch (e: Exception) {
+                "ошибка: ${e.message}"
+            }
+        } else {
+            "— (RAG-контекст не получен: нет индекса или MCP-сервера. Постройте индекс на экране RAG.)"
+        }
+
+        val reply = buildString {
+            append("Сравнение RAG по вопросу «").append(q).append("»:\n\n")
+            append("— Без RAG —\n").append(without).append("\n\n")
+            append("— С RAG —\n").append(with).append("\n\n")
+            append("RAG-чанки:\n")
+                .append(context?.takeIf { it.isNotBlank() } ?: "— нет")
+        }
+        _history.add(ChatMessage("assistant", reply))
+        shortTermStore.save(_history)
+
+        stats = AgentStats(
+            requests = stats.requests + 2,
+            inputTokens = stats.inputTokens + totalIn,
+            outputTokens = stats.outputTokens + totalOut,
+            totalTokens = stats.totalTokens + totalAll,
+            costUsd = stats.costUsd + cost,
+            compactions = compactCount,
+            savedTokens = savedTokens
+        )
+        Log.d("AGENT", "rag: ragtest query=\"${q.take(80)}\" chunks=${context?.let { c -> c.count { it == '\n' } }}")
+        return AgentResponse(
+            reply = reply,
+            promptTokens = totalIn,
+            completionTokens = totalOut,
+            totalTokens = totalAll,
+            costUsd = cost,
+            stats = stats
+        )
+    }
+
     /** Один вызов модели (с опциональными инструментами). */
     private suspend fun callModel(
         messages: List<ChatMessage>,
@@ -789,6 +868,44 @@ class ChatAgent(
         shortTermStore.save(_history)
         Log.d("AGENT", "mcp: delivered due reminders: ${text.take(120)}")
         return text
+    }
+
+    /** RAG (День 22): вопрос → релевантные чанки из индекса → блок для системного сообщения.
+     *  Вызывает MCP-инструмент index_search и форматирует топ результатов. Без LLM-цикла. */
+    private suspend fun buildRagContext(userMessage: String, force: Boolean = false): String? {
+        if (!force && !ragEnabled()) return null
+        val source = ragSource().trim().ifBlank { "all" }
+        val strategy = ragStrategy().trim().ifBlank { "structure" }
+        val endpoints = mcpEndpointsList()
+        if (endpoints.isEmpty()) return null
+        return try {
+            val mcp = McpClient(endpoints.first())
+            val conn = mcp.connectAndListTools()
+            if (conn.tools.none { it.name == "index_search" }) return null
+            val args = JSONObject()
+                .put("query", userMessage)
+                .put("source", source)
+                .put("strategy", strategy)
+                .toString()
+            val raw = mcp.callTool("index_search", args)
+            val j = JSONObject(raw)
+            if (!j.optBoolean("ok", false)) return null
+            val results = j.optJSONArray("results") ?: return null
+            if (results.length() == 0) return null
+            val sb = StringBuilder("Контекст из базы знаний (RAG, source=$source, strategy=$strategy):\n")
+            for (i in 0 until results.length()) {
+                val r = results.getJSONObject(i)
+                sb.append("- [").append("%.4f".format(r.optDouble("score", 0.0))).append("] ")
+                    .append(r.optString("section", "")).append(" (")
+                    .append(r.optString("source", "")).append(")\n  ")
+                    .append(r.optString("snippet", "")).append("\n")
+            }
+            Log.d("AGENT", "rag: query=\"${userMessage.take(80)}\" chunks=${results.length()} source=$source strategy=$strategy")
+            sb.toString().trimEnd()
+        } catch (e: Exception) {
+            Log.d("AGENT", "rag: failed: ${e.message}")
+            null
+        }
     }
 
     private fun McpTool.toChatTool(): ChatTool? {

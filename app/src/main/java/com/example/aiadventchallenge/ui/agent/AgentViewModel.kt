@@ -47,7 +47,10 @@ data class AgentSettings(
     val invariantGuard: Boolean,
     val mcp: Boolean,
     val team: String,
-    val mcpEndpoints: String
+    val mcpEndpoints: String,
+    val ragEnabled: Boolean,
+    val ragSource: String,
+    val ragStrategy: String
 )
 
 class AgentViewModel(
@@ -94,7 +97,10 @@ class AgentViewModel(
             invariantGuard = prefs.getBoolean("agent_invariants_guard", true),
             mcp = prefs.getBoolean("agent_mcp", true),
             team = prefs.getString("agent_team", "main") ?: "main",
-            mcpEndpoints = readMcpEndpoints().joinToString(", ")
+            mcpEndpoints = readMcpEndpoints().joinToString(", "),
+            ragEnabled = prefs.getBoolean("agent_rag", false),
+            ragSource = prefs.getString("agent_rag_source", "all") ?: "all",
+            ragStrategy = prefs.getString("agent_rag_strategy", "structure") ?: "structure"
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
@@ -127,7 +133,10 @@ class AgentViewModel(
         invariantsEnabled = { _settings.value.invariants },
         invariantGuardEnabled = { _settings.value.invariantGuard },
         mcpEnabled = { _settings.value.mcp },
-        mcpEndpoints = { readMcpEndpoints() }
+        mcpEndpoints = { readMcpEndpoints() },
+        ragEnabled = { _settings.value.ragEnabled },
+        ragSource = { _settings.value.ragSource },
+        ragStrategy = { _settings.value.ragStrategy }
     )
 
     /** Список эндпоинтов MCP: настройка "endpoints" (через запятую) в SharedPreferences "mcp",
@@ -481,6 +490,9 @@ class AgentViewModel(
             .putBoolean("agent_invariants_guard", new.invariantGuard)
             .putBoolean("agent_mcp", new.mcp)
             .putString("agent_team", new.team)
+            .putBoolean("agent_rag", new.ragEnabled)
+            .putString("agent_rag_source", new.ragSource.trim())
+            .putString("agent_rag_strategy", new.ragStrategy)
             .apply()
         // Список MCP-эндпоинтов хранится в префсах "mcp" (общих с экраном MCP).
         if (new.mcpEndpoints != _settings.value.mcpEndpoints) {

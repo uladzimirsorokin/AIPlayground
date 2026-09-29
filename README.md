@@ -113,6 +113,17 @@ The app has a **RAG screen** (route `rag`, button on the home screen, like MCP):
 ollama), then «Статус» to see built indexes and search. The screen calls MCP tools `index_build`,
 `index_status`, `index_search` on the main local server (needs it running + ollama up).
 
+### First RAG query in the agent (Day 22)
+
+The agent has a **RAG mode** toggle in settings: when on, each request first runs
+`question → index_search → context + question → LLM` — relevant chunks are injected as a system
+message («Контекст из базы знаний (RAG): …») before answering. Two modes (with/without RAG) let you
+compare answers. In the chat, the command `ragtest: <вопрос>` compares both modes for one question
+and shows the answers plus the retrieved chunks. Control set: `tools/rag_eval/questions.json`
+(10 questions with `expected` and `sources`). Automated comparison: `tools/rag_eval.py` generates
+both answers per question through an OpenAI-compatible API and writes `tools/rag_eval/report.md`
+(API key only from env `LLM_API_KEY`).
+
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
 > (DNS-rebinding protection). `tools/mcp_server.py` already listens on `0.0.0.0` and allows
 > `10.0.2.2` in `TransportSecuritySettings.allowed_hosts` — if you still get 421, make sure

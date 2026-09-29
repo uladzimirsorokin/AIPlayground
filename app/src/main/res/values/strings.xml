@@ -100,6 +100,10 @@
     <string name="settings_mcp_desc">Агент может вызывать инструменты из подключённых MCP-серверов (function calling) и использовать результат в ответе.</string>
     <string name="settings_mcp_endpoints">MCP endpoints (через запятую)</string>
     <string name="settings_mcp_endpoints_desc">Список MCP-серверов; агент сам выбирает инструмент и маршрутизирует вызовы по имени. Дефолт: основной (:8000) + заметки (:8001).</string>
+    <string name="settings_rag">RAG-контекст</string>
+    <string name="settings_rag_desc">Перед ответом агент ищет релевантные чанки в индексе (question → search → контекст + вопрос → LLM) и подмешивает их в запрос. Индекс должен быть построен (экран RAG).</string>
+    <string name="settings_rag_source">RAG source (подпапка в tools/)</string>
+    <string name="settings_rag_strategy">Стратегия RAG: %1$s</string>
     <string name="invariants_title">Инварианты</string>
     <string name="invariants_hint">Правила проекта, которые ассистент не имеет права нарушать. Подмешиваются в каждый запрос; страж отказывает при нарушении.</string>
     <string name="invariants_empty">Инвариантов нет. Добавьте правило.</string>
