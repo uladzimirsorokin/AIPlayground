@@ -8,6 +8,7 @@ import com.example.aiadventchallenge.data.CompletionResult
 import com.example.aiadventchallenge.data.LlmClient
 import com.example.aiadventchallenge.data.mcp.McpClient
 import com.example.aiadventchallenge.data.mcp.McpTool
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -56,6 +57,11 @@ class ChatAgent(
     private val ragEnabled: () -> Boolean,
     private val ragSource: () -> String,
     private val ragStrategy: () -> String,
+    private val ragMinScore: () -> Double,
+    private val ragRerank: () -> Boolean,
+    private val ragRewrite: () -> Boolean,
+    private val ragTopK: () -> Int,
+    private val ragFetchK: () -> Int,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
@@ -764,6 +770,33 @@ class ChatAgent(
         if (tools.isEmpty()) return callModel(messages, key, json, null)
         Log.d("AGENT", "mcp: servers=${endpoints} tools=${tools.map { it.name }}")
 
+        // День 23: в RAG-режиме модель не управляет параметрами поиска (фильтр/реранк/top_k/fetch_k) —
+        // их задают настройки агента. Оставляем в схеме только query, остальное подставим сами.
+        val modelTools = if (ragEnabled()) {
+            tools.map { t ->
+                if (t.name == "index_search") {
+                    ChatTool(
+                        t.name,
+                        t.description,
+                        JSONObject()
+                            .put("type", "object")
+                            .put(
+                                "properties",
+                                JSONObject().put(
+                                    "query",
+                                    JSONObject().put("type", "string").put("description", "поисковый запрос")
+                                )
+                            )
+                            .put("required", JSONArray().put("query"))
+                    )
+                } else {
+                    t
+                }
+            }
+        } else {
+            tools
+        }
+
         // Сработавшие напоминания доставляются в чат принудительно: check_due_reminders
         // вызывается в начале каждого запроса у каждого сервера, где такой инструмент есть,
         // и блок вставляется в контекст системным сообщением (once-delivery не даст задвоения).
@@ -791,21 +824,27 @@ class ChatAgent(
         )
 
         var loopMessages = baseMessages
-        var result = callModel(loopMessages, key, json, tools)
+        var result = callModel(loopMessages, key, json, modelTools)
         var rounds = 1
         while (result.toolCalls.isNotEmpty() && rounds < MAX_TOOL_ROUNDS) {
             loopMessages = loopMessages + ChatMessage("assistant", result.content, toolCalls = result.toolCalls)
             for (tc in result.toolCalls) {
                 val mcp = clientOf[tc.name]
+                // День 23: index_search в RAG-режиме выполняется с настройками агента, не модели.
+                val callArgs = if (tc.name == "index_search" && ragEnabled()) {
+                    forcedRagSearchArgs(tc.arguments)
+                } else {
+                    tc.arguments
+                }
                 val toolResult = if (mcp != null) {
-                    mcp.callTool(tc.name, tc.arguments)
+                    mcp.callTool(tc.name, callArgs)
                 } else {
                     "инструмент не найден ни на одном MCP-сервере: ${tc.name}"
                 }
-                Log.d("AGENT", "mcp: [${serverOf[tc.name]}] call ${tc.name}(${tc.arguments}) -> ${toolResult.take(140)}")
+                Log.d("AGENT", "mcp: [${serverOf[tc.name]}] call ${tc.name}($callArgs) -> ${toolResult.take(140)}")
                 loopMessages = loopMessages + ChatMessage("tool", toolResult, toolCallId = tc.id)
             }
-            result = callModel(loopMessages, key, json, tools)
+            result = callModel(loopMessages, key, json, modelTools)
             rounds++
         }
         // Модель могла упереться в лимит раундов и закончить tool-call-ом без текста —
@@ -870,22 +909,62 @@ class ChatAgent(
         return text
     }
 
-    /** RAG (День 22): вопрос → релевантные чанки из индекса → блок для системного сообщения.
-     *  Вызывает MCP-инструмент index_search и форматирует топ результатов. Без LLM-цикла. */
+    /** День 23: принудительно применяет RAG-настройки агента к вызову index_search.
+     *  Модель задаёт только query; source/strategy/top_k/fetch_k/min_score/rerank — из настроек. */
+    private fun forcedRagSearchArgs(rawArgs: String): String {
+        val a = runCatching { JSONObject(rawArgs) }.getOrElse { JSONObject() }
+        a.put("source", ragSource().trim().ifBlank { "all" })
+        a.put("strategy", ragStrategy().trim().ifBlank { "structure" })
+        a.put("top_k", ragTopK().coerceAtLeast(1))
+        a.put("fetch_k", ragFetchK().coerceAtLeast(0))
+        a.put("min_score", ragMinScore())
+        a.put("rerank", ragRerank())
+        return a.toString()
+    }
+
+    /** RAG (День 22–23): вопрос → (опц.) rewrite → поиск чанков (filter/rerank) → блок для
+     *  системного сообщения. Вызывает MCP-инструмент index_search. Без LLM-цикла (кроме rewrite). */
     private suspend fun buildRagContext(userMessage: String, force: Boolean = false): String? {
         if (!force && !ragEnabled()) return null
         val source = ragSource().trim().ifBlank { "all" }
         val strategy = ragStrategy().trim().ifBlank { "structure" }
+        val minScore = ragMinScore()
+        val rerank = ragRerank()
         val endpoints = mcpEndpointsList()
         if (endpoints.isEmpty()) return null
         return try {
+            // Query rewrite (День 23): перефразируем вопрос в поисковый запрос (один LLM-вызов).
+            var query = userMessage
+            if (ragRewrite()) {
+                val key = apiKey()
+                if (key != null) {
+                    runCatching {
+                        callModel(
+                            listOf(
+                                ChatMessage(
+                                    "user",
+                                    "Сформулируй КОРОТКИЙ поисковый запрос (3–6 слов) по смыслу вопроса: " +
+                                        "только ключевые сущности, без перечислений и синонимов. " +
+                                        "Верни ТОЛЬКО запрос, без пояснений.\n\nВопрос: $userMessage"
+                                )
+                            ),
+                            key, false, null
+                        ).content.trim()
+                    }.getOrNull()?.takeIf { it.isNotBlank() }?.let { query = it }
+                }
+            }
+
             val mcp = McpClient(endpoints.first())
             val conn = mcp.connectAndListTools()
             if (conn.tools.none { it.name == "index_search" }) return null
             val args = JSONObject()
-                .put("query", userMessage)
+                .put("query", query)
                 .put("source", source)
                 .put("strategy", strategy)
+                .put("top_k", ragTopK().coerceAtLeast(1))
+                .put("fetch_k", ragFetchK().coerceAtLeast(0))
+                .put("min_score", minScore)
+                .put("rerank", rerank)
                 .toString()
             val raw = mcp.callTool("index_search", args)
             val j = JSONObject(raw)
@@ -900,7 +979,12 @@ class ChatAgent(
                     .append(r.optString("source", "")).append(")\n  ")
                     .append(r.optString("snippet", "")).append("\n")
             }
-            Log.d("AGENT", "rag: query=\"${userMessage.take(80)}\" chunks=${results.length()} source=$source strategy=$strategy")
+            Log.d(
+                "AGENT",
+                "rag: query=\"${query.take(80)}\" rewritten=${query != userMessage} " +
+                    "chunks=${results.length()} source=$source strategy=$strategy " +
+                    "topK=${ragTopK()} fetchK=${ragFetchK()} minScore=$minScore rerank=$rerank"
+            )
             sb.toString().trimEnd()
         } catch (e: Exception) {
             Log.d("AGENT", "rag: failed: ${e.message}")

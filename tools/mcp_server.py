@@ -661,12 +661,15 @@ def index_search(
     query: Annotated[str, _Field(description="поисковый запрос")],
     source: Annotated[str, _Field(description="ОБЯЗАТЕЛЬНО: та же подпапка в tools/, что в index_build")],
     strategy: Annotated[Literal["fixed", "structure"], _Field(description="ОБЯЗАТЕЛЬНО: та же стратегия, которой построен индекс")],
-    top_k: Annotated[int, _Field(description="сколько чанков вернуть", ge=1)] = 3,
+    top_k: Annotated[int, _Field(description="сколько чанков вернуть ПОСЛЕ фильтрации", ge=1)] = 3,
+    fetch_k: Annotated[int, _Field(description="сколько кандидатов брать ДО фильтрации/реранка (0 = без ограничения)", ge=0)] = 0,
+    min_score: Annotated[float, _Field(description="порог отсечения нерелевантных по similarity (0 = без порога)")] = 0.0,
+    rerank: Annotated[bool, _Field(description="включить эвристический реранкер (эмбеддинг + лексическое пересечение)")] = False,
 ) -> str:
-    """Поиск по построенному RAG-индексу. strategy ДОЛЖНА совпадать со стратегией, которой индекс
-    был построен (если построен fixed — ищи fixed). Если пользователь просил построить индекс
-    с конкретными параметрами — сначала вызови index_build с ними, потом index_search с той же strategy.
-    Возвращает топ чанков: score, source, section, snippet."""
+    """Поиск по построенному RAG-индексу (День 23: фильтр по порогу + реранк).
+    Двухэтапно: retrieve топ-fetch_k кандидатов → отсечь по min_score → (опц.) rerank → top_k.
+    strategy ДОЛЖНА совпадать со стратегией, которой индекс был построен.
+    Возвращает топ чанков: score, source, section, snippet (и emb_score/lexical_overlap при rerank)."""
     path = _di.index_path(source, strategy, "ollama")
     if not os.path.exists(path):
         return json.dumps(
@@ -674,10 +677,14 @@ def index_search(
             ensure_ascii=False,
         )
     idx = _di.load_index(source, strategy, "ollama")
-    results = []
-    for score, meta in _di.search(idx, query, max(1, top_k)):
-        results.append({"score": score, **meta})
-    return json.dumps({"ok": True, "query": query, "results": results}, ensure_ascii=False)
+    results = [meta for _, meta in _di.search(
+        idx, query, max(1, top_k),
+        fetch_k=max(0, fetch_k), min_score=max(0.0, min_score), rerank=bool(rerank),
+    )]
+    return json.dumps(
+        {"ok": True, "query": query, "top_k": len(results), "results": results},
+        ensure_ascii=False,
+    )
 
 
 if __name__ == "__main__":

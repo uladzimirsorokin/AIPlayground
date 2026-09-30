@@ -65,6 +65,8 @@ import com.example.aiadventchallenge.data.agent.InvariantCategory
 import com.example.aiadventchallenge.data.agent.LongTermCategory
 import com.example.aiadventchallenge.data.agent.LongTermEntry
 import com.example.aiadventchallenge.data.agent.TaskStage
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -553,6 +555,68 @@ text = {
                                 selected = settings.ragStrategy,
                                 onSelect = { onChange(settings.copy(ragStrategy = it)) }
                             )
+                            Text(
+                                text = stringResource(R.string.settings_rag_minscore, settings.ragMinScore),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Slider(
+                                value = settings.ragMinScore,
+                                onValueChange = { onChange(settings.copy(ragMinScore = it)) },
+                                valueRange = 0f..1f
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = settings.ragTopK,
+                                    onValueChange = {
+                                        onChange(settings.copy(ragTopK = it.filter { c -> c.isDigit() }.take(3)))
+                                    },
+                                    label = { Text(stringResource(R.string.settings_rag_topk)) },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = settings.ragFetchK,
+                                    onValueChange = {
+                                        onChange(settings.copy(ragFetchK = it.filter { c -> c.isDigit() }.take(3)))
+                                    },
+                                    label = { Text(stringResource(R.string.settings_rag_fetchk)) },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_rag_rerank),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Switch(
+                                    checked = settings.ragRerank,
+                                    onCheckedChange = { onChange(settings.copy(ragRerank = it)) }
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_rag_rewrite),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Switch(
+                                    checked = settings.ragRewrite,
+                                    onCheckedChange = { onChange(settings.copy(ragRewrite = it)) }
+                                )
+                            }
                         }
                     }
                 }

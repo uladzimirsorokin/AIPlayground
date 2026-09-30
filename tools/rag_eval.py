@@ -25,7 +25,9 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
+import ssl
 import urllib.request
 from datetime import datetime, timezone
 
@@ -35,6 +37,32 @@ EVAL_DIR = os.path.join(TOOLS, "rag_eval")
 REPORT = os.path.join(EVAL_DIR, "report.md")
 
 import document_indexer as di  # noqa: E402
+
+
+_HTTPS_CTX = None
+
+
+def _https_context():
+    """SSL-контекст, работающий на Homebrew Python без системных CA-сертификатов
+    (как в mcp_server.py): ищем системные CA-файлы, fallback unverified для публичных API."""
+    global _HTTPS_CTX
+    if _HTTPS_CTX is not None:
+        return _HTTPS_CTX
+    for cafile in (
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/usr/local/etc/openssl/cert.pem",
+        "/opt/homebrew/etc/openssl/cert.pem",
+    ):
+        if os.path.exists(cafile):
+            try:
+                _HTTPS_CTX = ssl.create_default_context(cafile=cafile)
+                return _HTTPS_CTX
+            except Exception:
+                pass
+    _HTTPS_CTX = ssl._create_unverified_context()
+    return _HTTPS_CTX
 
 
 def load_local_properties() -> dict:
@@ -76,7 +104,7 @@ def complete(endpoint: str, model: str, key: str, messages: list, timeout: int =
             "Authorization": f"Bearer {key}",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=_https_context()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return data["choices"][0]["message"]["content"].strip()
 
@@ -122,17 +150,72 @@ def judge_answer(endpoint: str, model: str, key: str, question: str, expected: s
         return "—"
 
 
+def rewrite_query(endpoint: str, model: str, key: str, question: str) -> str:
+    """Query rewrite (День 23): перефразировать вопрос в поисковый запрос (ключевые слова/синонимы)."""
+    prompt = (
+        "Сформулируй КОРОТКИЙ поисковый запрос (3–6 слов) по смыслу вопроса: только ключевые "
+        "сущности, без перечислений и синонимов. Верни ТОЛЬКО запрос, без пояснений.\n\n"
+        f"Вопрос: {question}"
+    )
+    try:
+        out = complete(endpoint, model, key, [{"role": "user", "content": prompt}]).strip()
+        return out or question
+    except Exception:
+        return question
+
+
+def format_results(results: list) -> str:
+    if not results:
+        return ""
+    parts = ["Контекст из базы знаний (RAG):"]
+    for score, meta in results:
+        parts.append(f"- [{score:.4f}] {meta['source']} :: {meta['section']}\n  {meta['snippet']}")
+    return "\n".join(parts)
+
+
+def correct_rank_full(index: dict, query: str, expected_base: set):
+    """1-based позиция первого чанка из ожидаемого файла в полном embedding-ранжировании."""
+    if not expected_base:
+        return None
+    allres = di.search(index, query, top_k=len(index["chunks"]))
+    for i, (_, m) in enumerate(allres, 1):
+        if os.path.basename(m["source"]) in expected_base:
+            return i
+    return None
+
+
+def answer_hit(results: list, expected: str):
+    """Есть ли в найденных чанках слово-ответ (answer-level, а не file-level)."""
+    tokens = [t for t in re.findall(r"[a-zа-яё0-9]+", expected.lower()) if len(t) >= 4]
+    if not tokens:
+        return None
+    text = " ".join(m["snippet"] for _, m in results).lower()
+    return any(t in text for t in tokens)
+
+
+def answer_with_context(endpoint, model, key, sys_prompt, question, context):
+    msgs = [{"role": "system", "content": sys_prompt}]
+    if context:
+        msgs.append({"role": "system", "content": context})
+    msgs.append({"role": "user", "content": question})
+    return complete(endpoint, model, key, msgs)
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Сравнение ответов LLM без RAG и с RAG (День 22)")
+    ap = argparse.ArgumentParser(description="RAG: реранкинг/фильтрация + сравнение режимов (День 23)")
     ap.add_argument("--source", default="all")
     ap.add_argument("--strategy", choices=["fixed", "structure"], default="structure")
     ap.add_argument("--embedding", choices=["ollama", "tfidf"], default="ollama")
-    ap.add_argument("--top-k", type=int, default=3)
+    ap.add_argument("--top-k", type=int, default=3, help="топ-K ПОСЛЕ фильтрации")
+    ap.add_argument("--fetch-k", type=int, default=20, help="топ-K ДО фильтрации (кандидаты для реранка)")
+    ap.add_argument("--min-score", type=float, default=0.7, help="порог отсечения нерелевантных (similarity)")
     ap.add_argument("--questions", default=os.path.join(EVAL_DIR, "questions.json"))
     ap.add_argument("--auto-index", action="store_true",
                     help="построить индекс (document_indexer), если его ещё нет")
     ap.add_argument("--judge", action="store_true",
                     help="оценивать ответы LLM-судьёй против эталона (expected)")
+    ap.add_argument("--no-answers", action="store_true",
+                    help="только retrieval-метрики, без генерации ответов")
     args = ap.parse_args()
 
     with open(args.questions, encoding="utf-8") as f:
@@ -154,100 +237,170 @@ def main() -> None:
     print(f"Индекс: {index_path} ({len(index['chunks'])} чанков, {index['embedding_model']})")
 
     endpoint, model, key = llm_config()
-    if not key:
-        print("Нет LLM_API_KEY (переменная окружения). Ключ не хранится в репозитории.")
-        return 1
+    have_llm = bool(key)
+    if not have_llm:
+        print("Нет LLM_API_KEY — считаю только retrieval-метрики (rewrite и ответы пропускаю).")
 
-    sys_prompt = "Ты — полезный и краткий ассистент. Отвечай по делу, без лишней воды."
-
-    lines = [
-        f"# RAG-сравнение (День 22)",
-        "",
-        f"Дата: {datetime.now(timezone.utc).isoformat()}",
-        f"Индекс: source={args.source} strategy={args.strategy} embedding={args.embedding}",
-        f"Модель: {model} · top_k={args.top_k}",
-        "",
+    # Режимы retrieval (День 23): от «сырого» до rewrite+rerank+filter.
+    modes = [
+        ("naive", {"top_k": args.top_k}),
+        ("filter", {"top_k": args.top_k, "min_score": args.min_score}),
+        ("rerank", {"top_k": args.top_k, "fetch_k": args.fetch_k, "rerank": True}),
     ]
+    if have_llm:
+        modes.append(("rewrite", {"top_k": args.top_k, "fetch_k": args.fetch_k,
+                                  "min_score": args.min_score, "rerank": True, "rewrite": True}))
 
-    hits = 0
-    judged = {"without_yes": 0, "with_yes": 0, "n": 0}
-    summary_rows = []
+    stats = {name: {"hit": 0, "anshit": 0, "kept": 0, "top1": 0.0, "n": 0} for name, _ in modes}
+    per_q = []
 
     for i, q in enumerate(questions, 1):
         question = q["question"]
         expected = q.get("expected", "")
-        sources = ", ".join(q.get("sources", []))
+        expected_sources = q.get("sources", [])
+        expected_base = {os.path.basename(s) for s in expected_sources}
         print(f"\n[{i}/{len(questions)}] {question[:60]}…")
+        row = {}
+        for name, cfg in modes:
+            cfg = dict(cfg)
+            do_rewrite = cfg.pop("rewrite", False)
+            query = rewrite_query(endpoint, model, key, question) if (do_rewrite and have_llm) else question
+            res = di.search(index, query, **cfg)
+            hit = any(os.path.basename(m["source"]) in expected_base for _, m in res)
+            ah = bool(answer_hit(res, expected))
+            top1 = res[0][0] if res else 0.0
+            stats[name]["hit"] += 1 if hit else 0
+            stats[name]["anshit"] += 1 if ah else 0
+            stats[name]["kept"] += len(res)
+            stats[name]["top1"] += top1
+            stats[name]["n"] += 1
+            row[name] = {"results": res, "hit": hit, "anshit": ah, "query": query}
+            print(f"    {name:<8} file={'да' if hit else 'нет'} answer={'да' if ah else 'нет'} "
+                  f"kept={len(res)} top1={top1:.3f}")
+        # Воронка «улучшенного» пайплайна и место правильного чанка в embedding-ранжировании.
+        rank_full = correct_rank_full(index, question, expected_base)
+        if args.min_score > 0:
+            m_filtered = len(di.search(index, question, top_k=args.fetch_k, fetch_k=args.fetch_k,
+                                       min_score=args.min_score))
+        else:
+            m_filtered = min(args.fetch_k, len(index["chunks"]))
+        per_q.append({"question": question, "expected": expected, "sources": expected_sources,
+                      "row": row, "rank_full": rank_full, "m_filtered": m_filtered})
 
-        context = format_context(question, index, args.top_k)
-        hit = retrieval_hit(index, question, args.top_k, q.get("sources", []))
-        hits += 1 if hit else 0
+    # Генерация ответов и сравнение качества (no_rag / naive / improved).
+    sys_prompt = "Ты — полезный и краткий ассистент. Отвечай по делу, без лишней воды."
+    answered = []
+    if have_llm and not args.no_answers:
+        improved_mode = "rewrite" if "rewrite" in stats else "rerank"
+        judged = {"no_rag": 0, "naive": 0, "improved": 0, "n": 0}
+        for item in per_q:
+            question, expected = item["question"], item["expected"]
+            naive_ctx = format_results(item["row"]["naive"]["results"])
+            improved_ctx = format_results(item["row"][improved_mode]["results"])
+            no_rag = answer_with_context(endpoint, model, key, sys_prompt, question, None)
+            naive = answer_with_context(endpoint, model, key, sys_prompt, question, naive_ctx)
+            improved = answer_with_context(endpoint, model, key, sys_prompt, question, improved_ctx)
+            jn = ji = jm = "—"
+            if args.judge:
+                jn = judge_answer(endpoint, model, key, question, expected, no_rag)
+                ji = judge_answer(endpoint, model, key, question, expected, naive)
+                jm = judge_answer(endpoint, model, key, question, expected, improved)
+                judged["n"] += 1
+                judged["no_rag"] += 1 if jn == "да" else 0
+                judged["naive"] += 1 if ji == "да" else 0
+                judged["improved"] += 1 if jm == "да" else 0
+            answered.append({"item": item, "no_rag": no_rag, "naive": naive, "improved": improved,
+                             "jn": jn, "ji": ji, "jm": jm})
 
-        without = complete(
-            endpoint, model, key,
-            [{"role": "system", "content": sys_prompt}, {"role": "user", "content": question}],
-        )
-        with_rag = complete(
-            endpoint, model, key,
-            [
-                {"role": "system", "content": sys_prompt},
-                {"role": "system", "content": context},
-                {"role": "user", "content": question},
-            ],
-        ) if context else "— (нет релевантных чанков)"
-
-        j_without = j_with = "—"
-        if args.judge:
-            j_without = judge_answer(endpoint, model, key, question, expected, without)
-            j_with = judge_answer(endpoint, model, key, question, expected, with_rag)
-            judged["n"] += 1
-            judged["without_yes"] += 1 if j_without == "да" else 0
-            judged["with_yes"] += 1 if j_with == "да" else 0
-
-        summary_rows.append((i, hit, j_without, j_with))
-        lines += [
-            f"## {i}. {question}",
-            f"- **Ожидание:** {expected}",
-            f"- **Источники:** {sources}",
-            f"- **RAG-чанки:** {context if context else '— нет'}",
-            f"- **Retrieval hit (топ-1 в нужный файл):** {'да' if hit else 'нет'}",
-            f"- **Судья без RAG / с RAG:** {j_without} / {j_with}",
-            "",
-            "**Без RAG:**",
-            without,
-            "",
-            "**С RAG:**",
-            with_rag,
-            "",
-            "---",
-            "",
-        ]
-
-    # Сводка
-    lines += [
-        "## Сводка",
+    # Отчёт.
+    lines = [
+        "# RAG: реранкинг/фильтрация и сравнение режимов (День 23)",
         "",
-        f"- Вопросов: {len(questions)}",
-        f"- Retrieval hit: {hits}/{len(questions)} (топ-1 чанк попал в ожидаемый файл)",
-    ]
-    if args.judge:
-        lines += [
-            f"- Судья без RAG: {judged['without_yes']}/{judged['n']}",
-            f"- Судья с RAG: {judged['with_yes']}/{judged['n']}",
-        ]
-    lines += [
+        f"Дата: {datetime.now(timezone.utc).isoformat()}",
+        f"Индекс: source={args.source} strategy={args.strategy} embedding={args.embedding}",
+        f"Модель: {model or '—'} · top_k={args.top_k} · fetch_k={args.fetch_k} · min_score={args.min_score}",
         "",
-        "| № | hit | судья без | судья с |",
-        "|---|-----|-----------|---------|",
+        "```",
+        "ОФЛАЙН: корпус → чанки(fixed|structure) → эмбеддинги(ollama) → индекс.json",
+        "",
+        f"ОНЛАЙН: вопрос ──[rewrite? LLM]──► query'",
+        f"                              │ embed",
+        f"   [все {len(index['chunks'])} чанков] ──косинус──► sort",
+        f"                              │ retrieve",
+        f"                         fetch_k={args.fetch_k}",
+        f"                              │ filter (score ≥ min_score={args.min_score})",
+        f"                              ▼",
+        f"                         top candidates",
+        f"                              │ rerank? 0.7·emb + 0.3·лексика",
+        f"                              ▼",
+        f"                         top_k={args.top_k} ──► контекст + вопрос ──► LLM",
+        "```",
+        "",
+        "## Retrieval по режимам",
+        "",
+        "| режим | file-hit@top_k | answer-hit@top_k | avg чанков | avg top1 |",
+        "|---|---|---|---|---|",
     ]
-    for i, hit, jw, jr in summary_rows:
-        lines.append(f"| {i} | {'да' if hit else 'нет'} | {jw} | {jr} |")
+    for name, _ in modes:
+        s = stats[name]
+        n = s["n"] or 1
+        lines.append(f"| {name} | {s['hit']}/{s['n']} | {s['anshit']}/{s['n']} | {s['kept']/n:.1f} | {s['top1']/n:.3f} |")
     lines.append("")
+    print("\nRetrieval по режимам (file-hit — верный файл, answer-hit — слово-ответ в чанках):")
+    for name, _ in modes:
+        s = stats[name]
+        n = s["n"] or 1
+        print(f"  {name:<8} file={s['hit']}/{s['n']} answer={s['anshit']}/{s['n']} "
+              f"avg_kept={s['kept']/n:.1f} avg_top1={s['top1']/n:.3f}")
 
-    print(f"\nRetrieval hit: {hits}/{len(questions)}")
-    if args.judge:
-        print(f"Судья (содержит эталонный факт): без RAG {judged['without_yes']}/{judged['n']}, "
-              f"с RAG {judged['with_yes']}/{judged['n']}")
+    for item in per_q:
+        total = len(index["chunks"])
+        rank = item["rank_full"]
+        rerank_hit = item["row"].get("rerank", {}).get("hit")
+        lines += [
+            f"## {item['question']}",
+            f"- Ожидание: {item['expected']}",
+            f"- Источники: {', '.join(item['sources'])}",
+            f"- Воронка: всего {total} → fetch_k {args.fetch_k} → filter(min_score) {item['m_filtered']} "
+            f"→ top_k {args.top_k}",
+            f"- Правильный чанк: embedding-ранг {rank if rank else '—'}"
+            + (f"; после реранка в топ-{args.top_k}: {'да' if rerank_hit else 'нет'}" if rerank_hit is not None else ""),
+        ]
+        for name, _ in modes:
+            r = item["row"][name]
+            q = r["query"]
+            lines.append(f"- **{name}**: file-hit={'да' if r['hit'] else 'нет'}, "
+                         f"answer-hit={'да' if r['anshit'] else 'нет'}, kept={len(r['results'])}"
+                         + (f", query={q!r}" if q != item["question"] else ""))
+            for score, meta in r["results"]:
+                lines.append(f"    - [{score:.3f}] {meta['source']} :: {meta['section']}")
+        lines.append("")
+
+    if answered:
+        lines += ["## Качество ответов (no RAG vs naive RAG vs improved RAG)", ""]
+        for a in answered:
+            it = a["item"]
+            lines += [
+                f"### {it['question']}",
+                f"- Эталон: {it['expected']}",
+                f"- Судья: no RAG={a['jn']} · naive={a['ji']} · improved={a['jm']}",
+                "",
+                "**Без RAG:**", a["no_rag"], "",
+                "**Naive RAG:**", a["naive"], "",
+                "**Improved RAG (rewrite+rerank+filter):**", a["improved"], "",
+                "---", "",
+            ]
+        if args.judge:
+            j = judged
+            lines += [
+                "## Сводка судьи",
+                f"- Без RAG: {j['no_rag']}/{j['n']}",
+                f"- Naive RAG: {j['naive']}/{j['n']}",
+                f"- Improved RAG: {j['improved']}/{j['n']}",
+                "",
+            ]
+            print(f"\nСудья: без RAG {j['no_rag']}/{j['n']}, naive {j['naive']}/{j['n']}, "
+                  f"improved {j['improved']}/{j['n']}")
 
     os.makedirs(EVAL_DIR, exist_ok=True)
     with open(REPORT, "w", encoding="utf-8") as f:

@@ -124,6 +124,16 @@ and shows the answers plus the retrieved chunks. Control set: `tools/rag_eval/qu
 both answers per question through an OpenAI-compatible API and writes `tools/rag_eval/report.md`
 (API key only from env `LLM_API_KEY`).
 
+### Reranking & filtering (Day 23)
+
+Retrieval is two-stage: fetch `fetch_k` candidates by cosine similarity, drop those below a
+`min_score` threshold, optionally reorder with a heuristic reranker (0.7·embedding + 0.3·lexical
+overlap), then return `top_k`. Query rewrite (LLM) can rephrase the question into a search query
+before retrieval. Agent settings: `min score` slider, `rerank` and `rewrite` toggles. The MCP
+`index_search` tool accepts `fetch_k`, `min_score`, `rerank`. `rag_eval.py` compares modes
+(naive / filter / rerank / rewrite) with retrieval metrics; on the `tools/test` set rerank lifts
+hit@3 from 8/10 to 10/10 and filtering shrinks the context.
+
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
 > (DNS-rebinding protection). `tools/mcp_server.py` already listens on `0.0.0.0` and allows
 > `10.0.2.2` in `TransportSecuritySettings.allowed_hosts` — if you still get 421, make sure

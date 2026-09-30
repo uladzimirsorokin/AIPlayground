@@ -50,7 +50,12 @@ data class AgentSettings(
     val mcpEndpoints: String,
     val ragEnabled: Boolean,
     val ragSource: String,
-    val ragStrategy: String
+    val ragStrategy: String,
+    val ragMinScore: Float,
+    val ragRerank: Boolean,
+    val ragRewrite: Boolean,
+    val ragTopK: String,
+    val ragFetchK: String
 )
 
 class AgentViewModel(
@@ -100,7 +105,12 @@ class AgentViewModel(
             mcpEndpoints = readMcpEndpoints().joinToString(", "),
             ragEnabled = prefs.getBoolean("agent_rag", false),
             ragSource = prefs.getString("agent_rag_source", "all") ?: "all",
-            ragStrategy = prefs.getString("agent_rag_strategy", "structure") ?: "structure"
+            ragStrategy = prefs.getString("agent_rag_strategy", "structure") ?: "structure",
+            ragMinScore = prefs.getFloat("agent_rag_min_score", 0f),
+            ragRerank = prefs.getBoolean("agent_rag_rerank", false),
+            ragRewrite = prefs.getBoolean("agent_rag_rewrite", false),
+            ragTopK = prefs.getString("agent_rag_top_k", "3") ?: "3",
+            ragFetchK = prefs.getString("agent_rag_fetch_k", "20") ?: "20"
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
@@ -136,7 +146,12 @@ class AgentViewModel(
         mcpEndpoints = { readMcpEndpoints() },
         ragEnabled = { _settings.value.ragEnabled },
         ragSource = { _settings.value.ragSource },
-        ragStrategy = { _settings.value.ragStrategy }
+        ragStrategy = { _settings.value.ragStrategy },
+        ragMinScore = { _settings.value.ragMinScore.toDouble() },
+        ragRerank = { _settings.value.ragRerank },
+        ragRewrite = { _settings.value.ragRewrite },
+        ragTopK = { _settings.value.ragTopK.toIntOrNull() ?: 3 },
+        ragFetchK = { _settings.value.ragFetchK.toIntOrNull() ?: 20 }
     )
 
     /** Список эндпоинтов MCP: настройка "endpoints" (через запятую) в SharedPreferences "mcp",
@@ -493,6 +508,11 @@ class AgentViewModel(
             .putBoolean("agent_rag", new.ragEnabled)
             .putString("agent_rag_source", new.ragSource.trim())
             .putString("agent_rag_strategy", new.ragStrategy)
+            .putFloat("agent_rag_min_score", new.ragMinScore)
+            .putBoolean("agent_rag_rerank", new.ragRerank)
+            .putBoolean("agent_rag_rewrite", new.ragRewrite)
+            .putString("agent_rag_top_k", new.ragTopK.filter { it.isDigit() }.take(3))
+            .putString("agent_rag_fetch_k", new.ragFetchK.filter { it.isDigit() }.take(3))
             .apply()
         // Список MCP-эндпоинтов хранится в префсах "mcp" (общих с экраном MCP).
         if (new.mcpEndpoints != _settings.value.mcpEndpoints) {

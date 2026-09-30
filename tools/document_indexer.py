@@ -310,7 +310,19 @@ def _cosine(a, b) -> float:
     return sum(x * y for x, y in zip(a, b)) / (na * nb)
 
 
-def search(index: dict, query: str, top_k: int) -> list:
+def search(
+    index: dict,
+    query: str,
+    top_k: int,
+    fetch_k: int = 0,
+    min_score: float = 0.0,
+    rerank: bool = False,
+) -> list:
+    """Двухэтапный поиск (День 23):
+      1) retrieve — косинусное сходство запроса с чанками, берём fetch_k кандидатов;
+      2) filter/rerank — отсекаем по min_score и (опц.) переупорядочиваем эвристикой
+         (эмбеддинг + доля лексического пересечения с запросом), затем top_k.
+    fetch_k=0 → без ограничения кандидатов; min_score=0 → без порога; rerank=False → без реранка."""
     qv = embed_query(query, index)
     scored = []
     for i, vec in enumerate(index["vectors"]):
@@ -321,19 +333,47 @@ def search(index: dict, query: str, top_k: int) -> list:
         if score > 0:
             scored.append((score, i))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [
-        (
-            round(score, 4),
-            {
-                "chunk_id": index["chunks"][i]["chunk_id"],
-                "source": index["chunks"][i]["source"],
-                "section": index["chunks"][i]["section"],
-                "tokens": index["chunks"][i]["tokens"],
-                "snippet": index["chunks"][i]["text"][:200],
-            },
-        )
-        for score, i in scored[:top_k]
-    ]
+
+    # 1) retrieve: топ-K кандидатов ДО фильтрации.
+    if fetch_k and fetch_k > 0:
+        scored = scored[:fetch_k]
+
+    # 2) filter: порог отсечения по similarity.
+    if min_score > 0:
+        scored = [(s, i) for s, i in scored if s >= min_score]
+
+    # 2b) rerank: эвристика — комбинируем эмбеддинг-скор с лексическим пересечением.
+    if rerank and scored:
+        q_terms = {t for t in tokenize(query) if t not in STOPWORDS}
+        ranked = []
+        for score, i in scored:
+            c_terms = {t for t in tokenize(index["chunks"][i]["text"]) if t not in STOPWORDS}
+            overlap = len(q_terms & c_terms) / len(q_terms) if q_terms else 0.0
+            combined = 0.7 * score + 0.3 * overlap
+            ranked.append((combined, score, overlap, i))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        scored = [(combined, i) for combined, _, _, i in ranked]
+        rerank_info = {i: (sc, ov) for _, sc, ov, i in ranked}
+    else:
+        rerank_info = {}
+
+    out = []
+    for score, i in scored[:top_k]:
+        chunk = index["chunks"][i]
+        meta = {
+            "chunk_id": chunk["chunk_id"],
+            "source": chunk["source"],
+            "section": chunk["section"],
+            "tokens": chunk["tokens"],
+            "snippet": chunk["text"][:600],
+            "score": round(score, 4),
+        }
+        if i in rerank_info:
+            emb_score, overlap = rerank_info[i]
+            meta["emb_score"] = round(emb_score, 4)
+            meta["lexical_overlap"] = round(overlap, 4)
+        out.append((round(score, 4), meta))
+    return out
 
 
 def stats_report(index: dict) -> dict:

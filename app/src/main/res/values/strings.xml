@@ -104,6 +104,11 @@
     <string name="settings_rag_desc">Перед ответом агент ищет релевантные чанки в индексе (question → search → контекст + вопрос → LLM) и подмешивает их в запрос. Индекс должен быть построен (экран RAG).</string>
     <string name="settings_rag_source">RAG source (подпапка в tools/)</string>
     <string name="settings_rag_strategy">Стратегия RAG: %1$s</string>
+    <string name="settings_rag_minscore">Порог отсечения (min similarity): %1$.2f</string>
+    <string name="settings_rag_topk">top_k (в контекст)</string>
+    <string name="settings_rag_fetchk">fetch_k (кандидаты)</string>
+    <string name="settings_rag_rerank">Реранк (эмбеддинг + лексика)</string>
+    <string name="settings_rag_rewrite">Query rewrite (LLM)</string>
     <string name="invariants_title">Инварианты</string>
     <string name="invariants_hint">Правила проекта, которые ассистент не имеет права нарушать. Подмешиваются в каждый запрос; страж отказывает при нарушении.</string>
     <string name="invariants_empty">Инвариантов нет. Добавьте правило.</string>
