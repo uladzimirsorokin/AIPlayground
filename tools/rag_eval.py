@@ -193,6 +193,83 @@ def answer_hit(results: list, expected: str):
     return any(t in text for t in tokens)
 
 
+UNKNOWN_QUESTIONS = [
+    "Какая столица Австралии?",
+    "Сколько спутников у планеты Марс?",
+    "Кто написал роман «Война и мир»?",
+]
+
+
+RAG_SYSTEM_INSTRUCTIONS = (
+    "Отвечай, опираясь ТОЛЬКО на приведённый контекст.\n"
+    "1) Сначала краткий ответ.\n"
+    "2) Затем блок «Источники:» — для каждого использованного чанка: [номер] source :: section.\n"
+    "3) Затем блок «Цитаты:» — 1–2 дословных фрагмента из контекста в кавычках «...» с номером [номер].\n"
+    "Если в контексте нет ответа — ответь ровно «Не знаю» и попроси уточнить вопрос. Не выдумывай факты."
+)
+
+
+def rag_context_block(results: list) -> str:
+    if not results:
+        return ("Контекст из базы знаний (RAG): релевантных данных не найдено. "
+                "Ответь «Не знаю» и попроси уточнить вопрос.")
+    parts = ["Контекст из базы знаний (RAG):"]
+    for i, (score, m) in enumerate(results, 1):
+        parts.append(f"[{i}] {m['source']} :: {m['section']} (score {score:.3f})\n{m['snippet']}")
+    return "\n".join(parts)
+
+
+def rag_answer(endpoint, model, key, question, results):
+    return complete(endpoint, model, key, [
+        {"role": "system", "content": RAG_SYSTEM_INSTRUCTIONS},
+        {"role": "system", "content": rag_context_block(results)},
+        {"role": "user", "content": question},
+    ])
+
+
+def answer_quality(answer: str, results: list):
+    """(has_sources, has_quotes, grounded): источники/цитаты/подтверждены ли цитаты чанками."""
+    low = answer.lower()
+    tokens = set()
+    for _, m in results:
+        tokens.add(os.path.basename(m["source"]).lower())
+        if m.get("section"):
+            tokens.add(m["section"].lower())
+    has_sources = ("источник" in low) and any(t and t in low for t in tokens)
+    quotes = re.findall(r"«([^»]{8,})»", answer) + re.findall(r"\"([^\"]{8,})\"", answer)
+    has_quotes = len(quotes) > 0
+    ctx = re.sub(r"\s+", " ", " ".join(m["snippet"] for _, m in results)).lower()
+    grounded = False
+    for q in quotes:
+        qn = re.sub(r"\s+", " ", q).strip().lower()
+        if qn and qn in ctx:
+            grounded = True
+            break
+    return has_sources, has_quotes, grounded
+
+
+def is_faithful(endpoint, model, key, context: str, answer: str) -> bool:
+    """LLM-faithfulness (День 24): следует ли ответ только из контекста (нет фактов вне контекста)."""
+    prompt = (
+        f"Контекст:\n{context}\n\nОтвет модели: {answer}\n\n"
+        "Следует ли ответ ТОЛЬКО из контекста (нет фактов, которых в контексте нет)? "
+        "Верни строго JSON: {\"supported\": true|false}."
+    )
+    try:
+        out = complete(endpoint, model, key, [
+            {"role": "system", "content": "Ты — строгий проверяющий фактов. Отвечай только JSON."},
+            {"role": "user", "content": prompt},
+        ])
+        c = out.strip().removeprefix("```json").removesuffix("```").strip()
+        s = c.find("{")
+        e = c.rfind("}")
+        if s < 0 or e <= s:
+            return False
+        return bool(json.loads(c[s:e + 1]).get("supported", False))
+    except Exception:
+        return False
+
+
 def answer_with_context(endpoint, model, key, sys_prompt, question, context):
     msgs = [{"role": "system", "content": sys_prompt}]
     if context:
@@ -287,19 +364,29 @@ def main() -> None:
         per_q.append({"question": question, "expected": expected, "sources": expected_sources,
                       "row": row, "rank_full": rank_full, "m_filtered": m_filtered})
 
-    # Генерация ответов и сравнение качества (no_rag / naive / improved).
+    # Генерация ответов и сравнение качества (no_rag / naive / improved) + проверка цитат.
     sys_prompt = "Ты — полезный и краткий ассистент. Отвечай по делу, без лишней воды."
     answered = []
+    citation = {"sources": 0, "quotes": 0, "grounded": 0, "faithful": 0, "n": 0}
     if have_llm and not args.no_answers:
         improved_mode = "rewrite" if "rewrite" in stats else "rerank"
         judged = {"no_rag": 0, "naive": 0, "improved": 0, "n": 0}
         for item in per_q:
             question, expected = item["question"], item["expected"]
-            naive_ctx = format_results(item["row"]["naive"]["results"])
-            improved_ctx = format_results(item["row"][improved_mode]["results"])
+            naive_results = item["row"]["naive"]["results"]
+            improved_results = item["row"][improved_mode]["results"]
             no_rag = answer_with_context(endpoint, model, key, sys_prompt, question, None)
-            naive = answer_with_context(endpoint, model, key, sys_prompt, question, naive_ctx)
-            improved = answer_with_context(endpoint, model, key, sys_prompt, question, improved_ctx)
+            naive = rag_answer(endpoint, model, key, question, naive_results)
+            improved = rag_answer(endpoint, model, key, question, improved_results)
+            has_src, has_q, grounded = answer_quality(improved, improved_results)
+            faithful = is_faithful(endpoint, model, key, rag_context_block(improved_results), improved) \
+                if args.judge else None
+            citation["n"] += 1
+            citation["sources"] += 1 if has_src else 0
+            citation["quotes"] += 1 if has_q else 0
+            citation["grounded"] += 1 if grounded else 0
+            if faithful is not None:
+                citation["faithful"] += 1 if faithful else 0
             jn = ji = jm = "—"
             if args.judge:
                 jn = judge_answer(endpoint, model, key, question, expected, no_rag)
@@ -310,7 +397,20 @@ def main() -> None:
                 judged["naive"] += 1 if ji == "да" else 0
                 judged["improved"] += 1 if jm == "да" else 0
             answered.append({"item": item, "no_rag": no_rag, "naive": naive, "improved": improved,
-                             "jn": jn, "ji": ji, "jm": jm})
+                             "jn": jn, "ji": ji, "jm": jm,
+                             "has_src": has_src, "has_q": has_q, "grounded": grounded,
+                             "faithful": faithful})
+
+    # Режим «не знаю»: вопросы вне корпуса с высоким порогом → пустой контекст → должен быть отказ.
+    unknown_results = []
+    if have_llm and not args.no_answers:
+        for uq in UNKNOWN_QUESTIONS:
+            res = di.search(index, uq, top_k=args.top_k, fetch_k=args.fetch_k,
+                            min_score=max(args.min_score, 0.9), rerank=True)
+            ans = rag_answer(endpoint, model, key, uq, res)
+            refused = ("не знаю" in ans.lower()) or ("уточн" in ans.lower())
+            unknown_results.append({"question": uq, "answer": ans, "refused": refused,
+                                    "kept": len(res)})
 
     # Отчёт.
     lines = [
@@ -384,12 +484,29 @@ def main() -> None:
                 f"### {it['question']}",
                 f"- Эталон: {it['expected']}",
                 f"- Судья: no RAG={a['jn']} · naive={a['ji']} · improved={a['jm']}",
+                f"- Источники в ответе: {'да' if a['has_src'] else 'нет'} · "
+                f"цитаты: {'да' if a['has_q'] else 'нет'} · цитаты подтверждены чанками: "
+                f"{'да' if a['grounded'] else 'нет'}",
                 "",
                 "**Без RAG:**", a["no_rag"], "",
                 "**Naive RAG:**", a["naive"], "",
                 "**Improved RAG (rewrite+rerank+filter):**", a["improved"], "",
                 "---", "",
             ]
+        c = citation
+        lines += [
+            "## Источники и цитаты (на improved-ответах)",
+            "",
+            f"- Источники в ответе: {c['sources']}/{c['n']}",
+            f"- Цитаты в ответе: {c['quotes']}/{c['n']}",
+            f"- Цитаты подтверждены чанками: {c['grounded']}/{c['n']}",
+        ]
+        if args.judge:
+            lines.append(f"- Ответ подтверждён контекстом (faithfulness): {c['faithful']}/{c['n']}")
+        lines.append("")
+        print(f"\nЦитаты/источники: источники {c['sources']}/{c['n']}, "
+              f"цитаты {c['quotes']}/{c['n']}, подтверждены {c['grounded']}/{c['n']}"
+              + (f", faithful {c['faithful']}/{c['n']}" if args.judge else ""))
         if args.judge:
             j = judged
             lines += [
@@ -399,8 +516,21 @@ def main() -> None:
                 f"- Improved RAG: {j['improved']}/{j['n']}",
                 "",
             ]
-            print(f"\nСудья: без RAG {j['no_rag']}/{j['n']}, naive {j['naive']}/{j['n']}, "
+            print(f"Судья: без RAG {j['no_rag']}/{j['n']}, naive {j['naive']}/{j['n']}, "
                   f"improved {j['improved']}/{j['n']}")
+
+    if unknown_results:
+        refused = sum(1 for u in unknown_results if u["refused"])
+        lines += [
+            "## Режим «не знаю» (вне корпуса, высокий порог)",
+            "",
+            f"- Отказ («не знаю»/уточнение): {refused}/{len(unknown_results)}",
+            "",
+        ]
+        for u in unknown_results:
+            lines += [f"- «{u['question']}» (чанков {u['kept']}, отказ={'да' if u['refused'] else 'нет'})",
+                      f"  > {u['answer']}", ""]
+        print(f"Режим «не знаю»: отказ {refused}/{len(unknown_results)}")
 
     os.makedirs(EVAL_DIR, exist_ok=True)
     with open(REPORT, "w", encoding="utf-8") as f:

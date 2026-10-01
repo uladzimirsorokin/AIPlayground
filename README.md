@@ -134,6 +134,16 @@ before retrieval. Agent settings: `min score` slider, `rerank` and `rewrite` tog
 (naive / filter / rerank / rewrite) with retrieval metrics; on the `tools/test` set rerank lifts
 hit@3 from 8/10 to 10/10 and filtering shrinks the context.
 
+### Citations, sources & anti-hallucination (Day 24)
+
+In RAG mode the answer is requested as strict JSON `{answer, sources[], quotes[]}` with an
+instruction to use only the context and to cite quotes that support the key fact. The agent then
+**validates**: structure + quotes verbatim in the context (`ragAnswerValid`) and an
+**LLM-faithfulness** check (`isFaithful` — is the answer supported only by the context), with one
+retry and a final «Не знаю» fallback. If no chunk passes the relevance threshold, the agent answers
+«Не знаю» without calling the model. `rag_eval.py` verifies sources / quotes / grounded / faithful
+and runs an out-of-corpus «не знаю» test.
+
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
 > (DNS-rebinding protection). `tools/mcp_server.py` already listens on `0.0.0.0` and allows
 > `10.0.2.2` in `TransportSecuritySettings.allowed_hosts` — if you still get 421, make sure

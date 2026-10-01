@@ -8,7 +8,6 @@ import com.example.aiadventchallenge.data.CompletionResult
 import com.example.aiadventchallenge.data.LlmClient
 import com.example.aiadventchallenge.data.mcp.McpClient
 import com.example.aiadventchallenge.data.mcp.McpTool
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -412,8 +411,25 @@ class ChatAgent(
             workingStore.saveFacts(memory.facts)
         }
 
-        // RAG-контекст (День 22): релевантные чанки из индекса подмешиваются в запрос.
-        val ragContext = buildRagContext(userMessage)
+        // RAG-контекст (День 22–24). Порог проверяем до вызова LLM: если включён RAG и ничего
+        // не прошло порог — сразу отвечаем «Не знаю», не тратя запрос к модели (анти-галлюцинации).
+        val ragOutcome = buildRagOutcome(userMessage)
+        if (ragEnabled() && ragOutcome != null && !ragOutcome.passed) {
+            val reply = "Не знаю. В базе знаний нет достаточно релевантной информации по этому " +
+                "вопросу — уточните, пожалуйста, формулировку."
+            _history.add(ChatMessage("assistant", reply))
+            shortTermStore.save(_history)
+            Log.d("AGENT", "rag: below threshold -> refuse (no LLM call)")
+            return AgentResponse(
+                reply = reply,
+                promptTokens = 0,
+                completionTokens = 0,
+                totalTokens = 0,
+                costUsd = 0.0,
+                stats = stats
+            )
+        }
+        val ragContext = ragOutcome?.context
 
         val messages = buildList {
             systemPrompt().takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
@@ -456,7 +472,10 @@ class ChatAgent(
 
         var sentMessages = messages
         val result = try {
-            if (mcpEnabled() && mcpEndpointsList().isNotEmpty()) {
+            if (ragEnabled() && ragOutcome?.passed == true && ragContext != null) {
+                // День 24: RAG-ответ в формате JSON (answer/sources/quotes) + валидация и один retry.
+                runRagAnswer(messages, key, ragContext)
+            } else if (mcpEnabled() && mcpEndpointsList().isNotEmpty()) {
                 try {
                     runWithMcpTools(messages, key, json) { finalMessages -> sentMessages = finalMessages }
                 } catch (e: Exception) {
@@ -681,10 +700,11 @@ class ChatAgent(
             "ошибка: ${e.message}"
         }
 
-        val context = buildRagContext(q, force = true)
-        val with = if (context != null) {
+        val outcome = buildRagOutcome(q, force = true)
+        val context = outcome?.context
+        val with = if (outcome != null) {
             try {
-                val r = callModel(base + ChatMessage("system", context) + userMsg, key, jsonFormat(), null)
+                val r = callModel(base + ChatMessage("system", context ?: "") + userMsg, key, jsonFormat(), null)
                 totalIn += r.promptTokens; totalOut += r.completionTokens
                 totalAll += r.totalTokens; cost += r.costUsd
                 r.content
@@ -770,32 +790,9 @@ class ChatAgent(
         if (tools.isEmpty()) return callModel(messages, key, json, null)
         Log.d("AGENT", "mcp: servers=${endpoints} tools=${tools.map { it.name }}")
 
-        // День 23: в RAG-режиме модель не управляет параметрами поиска (фильтр/реранк/top_k/fetch_k) —
-        // их задают настройки агента. Оставляем в схеме только query, остальное подставим сами.
-        val modelTools = if (ragEnabled()) {
-            tools.map { t ->
-                if (t.name == "index_search") {
-                    ChatTool(
-                        t.name,
-                        t.description,
-                        JSONObject()
-                            .put("type", "object")
-                            .put(
-                                "properties",
-                                JSONObject().put(
-                                    "query",
-                                    JSONObject().put("type", "string").put("description", "поисковый запрос")
-                                )
-                            )
-                            .put("required", JSONArray().put("query"))
-                    )
-                } else {
-                    t
-                }
-            }
-        } else {
-            tools
-        }
+        // День 24: в RAG-режиме контекст уже подмешан агентом автоматически, поэтому index_search
+        // не даём модели вовсе — иначе она делает лишние походы в RAG. Остальные инструменты — как есть.
+        val modelTools = if (ragEnabled()) tools.filter { it.name != "index_search" } else tools
 
         // Сработавшие напоминания доставляются в чат принудительно: check_due_reminders
         // вызывается в начале каждого запроса у каждого сервера, где такой инструмент есть,
@@ -922,9 +919,161 @@ class ChatAgent(
         return a.toString()
     }
 
-    /** RAG (День 22–23): вопрос → (опц.) rewrite → поиск чанков (filter/rerank) → блок для
-     *  системного сообщения. Вызывает MCP-инструмент index_search. Без LLM-цикла (кроме rewrite). */
-    private suspend fun buildRagContext(userMessage: String, force: Boolean = false): String? {
+    /** Результат RAG-поиска: контекст для LLM и прошёл ли хоть один чанк порог релевантности. */
+    private data class RagOutcome(val context: String?, val passed: Boolean)
+
+    private data class RagSource(val n: Int, val source: String, val section: String, val chunkId: String)
+    private data class RagQuote(val text: String, val n: Int)
+    private data class RagAnswer(val answer: String, val sources: List<RagSource>, val quotes: List<RagQuote>)
+
+    /** День 24: строгая JSON-схема ответа RAG (answer + sources + quotes). */
+    private val ragJsonInstruction: String =
+        "Верни ответ СТРОГО в формате JSON (без markdown, без пояснений):\n" +
+            "{\"answer\": \"краткий ответ\", " +
+            "\"sources\": [{\"n\": 1, \"source\": \"...\", \"section\": \"...\", \"chunk_id\": \"...\"}], " +
+            "\"quotes\": [{\"text\": \"дословный фрагмент из контекста\", \"n\": 1}]}\n" +
+            "СТРОГИЕ ТРЕБОВАНИЯ:\n" +
+            "- Используй ТОЛЬКО факты из приведённого контекста. ЗАПРЕЩЕНО добавлять факты, " +
+            "которых нет в контексте (даже если ты их знаешь).\n" +
+            "- Каждый источник — реально использованный чанк (n — его номер в контексте).\n" +
+            "- Каждая цитата — ДОСЛОВНЫЙ фрагмент из контекста, который НАПРЯМУЮ подтверждает " +
+            "ключевой факт ответа (а не просто взят из того же документа).\n" +
+            "- Если в контексте нет ответа на вопрос — верни " +
+            "{\"answer\": \"Не знаю\", \"sources\": [], \"quotes\": []}."
+
+    private fun ragNorm(s: String): String =
+        s.lowercase().replace(Regex("\\s+"), " ").trim()
+
+    private fun parseRagAnswer(raw: String): RagAnswer? {
+        val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val start = cleaned.indexOf('{')
+        val end = cleaned.lastIndexOf('}')
+        if (start < 0 || end <= start) return null
+        return runCatching {
+            val o = JSONObject(cleaned.substring(start, end + 1))
+            val sources = mutableListOf<RagSource>()
+            o.optJSONArray("sources")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val s = arr.optJSONObject(i) ?: continue
+                    sources.add(
+                        RagSource(
+                            n = s.optInt("n", i + 1),
+                            source = s.optString("source", ""),
+                            section = s.optString("section", ""),
+                            chunkId = s.optString("chunk_id", "")
+                        )
+                    )
+                }
+            }
+            val quotes = mutableListOf<RagQuote>()
+            o.optJSONArray("quotes")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val q = arr.optJSONObject(i) ?: continue
+                    quotes.add(RagQuote(text = q.optString("text", ""), n = q.optInt("n", 0)))
+                }
+            }
+            RagAnswer(answer = o.optString("answer", ""), sources = sources, quotes = quotes)
+        }.getOrNull()
+    }
+
+    /** Валидация: answer непустой; для не-«не знаю» — есть источники и цитаты, и цитаты дословно из контекста. */
+    private fun ragAnswerValid(a: RagAnswer?, context: String): Boolean {
+        if (a == null || a.answer.isBlank()) return false
+        if (a.answer.contains("не знаю", ignoreCase = true)) return true
+        if (a.sources.isEmpty() || a.quotes.isEmpty()) return false
+        val ctx = ragNorm(context)
+        return a.quotes.all { it.text.isNotBlank() && ctx.contains(ragNorm(it.text)) }
+    }
+
+    private fun renderRagAnswer(a: RagAnswer): String = buildString {
+        append(a.answer.trim())
+        if (a.sources.isNotEmpty()) {
+            append("\n\nИсточники:\n")
+            a.sources.forEach { s ->
+                append("[${s.n}] ${s.source} :: ${s.section}")
+                if (s.chunkId.isNotBlank()) append(" (${s.chunkId})")
+                append("\n")
+            }
+        }
+        if (a.quotes.isNotEmpty()) {
+            append("\nЦитаты:\n")
+            a.quotes.forEach { append("«${it.text.trim()}» [${it.n}]\n") }
+        }
+    }.trim()
+
+    /** RAG-ответ в JSON с валидацией (структура + цитаты + LLM-faithfulness) и одним повтором (День 24). */
+    private suspend fun runRagAnswer(
+        messages: List<ChatMessage>,
+        key: String,
+        context: String
+    ): CompletionResult {
+        val msgs = messages + ChatMessage("system", ragJsonInstruction)
+        var result = callModel(msgs, key, true, null)
+        var parsed = parseRagAnswer(result.content)
+        if (ragAnswerValid(parsed, context) && isFaithful(key, context, parsed!!)) {
+            return result.copy(content = renderRagAnswer(parsed))
+        }
+
+        Log.d("AGENT", "rag: answer failed validation, retrying once")
+        val retry = msgs + ChatMessage("assistant", result.content) +
+            ChatMessage(
+                "user",
+                "Ответ отклонён валидатором: либо формат не JSON, либо есть факты вне контекста, " +
+                    "либо цитата не подтверждает ответ. Исправь: используй ТОЛЬКО контекст; цитаты — " +
+                    "дословные и подтверждающие ключевой факт; при отсутствии ответа — \"Не знаю\"."
+            )
+        val r2 = callModel(retry, key, true, null)
+        val p2 = parseRagAnswer(r2.content)
+        val total = result.copy(
+            promptTokens = result.promptTokens + r2.promptTokens,
+            completionTokens = result.completionTokens + r2.completionTokens,
+            totalTokens = result.totalTokens + r2.totalTokens,
+            costUsd = result.costUsd + r2.costUsd,
+            model = r2.model ?: result.model
+        )
+        if (p2 != null && ragAnswerValid(p2, context) && isFaithful(key, context, p2)) {
+            return total.copy(content = renderRagAnswer(p2))
+        }
+        // Дважды не прошло — не рискуем галлюцинацией, отвечаем «Не знаю».
+        Log.d("AGENT", "rag: failed validation twice -> refuse")
+        return total.copy(
+            content = "Не знаю. Не удалось надёжно подтвердить ответ по найденному контексту — " +
+                "уточните, пожалуйста, вопрос."
+        )
+    }
+
+    /** LLM-faithfulness (День 24): подтверждается ли ответ контекстом и поддерживают ли цитаты факт. */
+    private suspend fun isFaithful(key: String, context: String, a: RagAnswer): Boolean {
+        if (a.answer.contains("не знаю", ignoreCase = true)) return true
+        val quotes = a.quotes.joinToString(" | ") { it.text }
+        val prompt = buildString {
+            append("Контекст:\n").append(context).append("\n\n")
+            append("Ответ модели: ").append(a.answer).append("\n")
+            append("Цитаты: ").append(quotes).append("\n\n")
+            append(
+                "Проверь строго: (1) следует ли ответ ТОЛЬКО из контекста (нет фактов, которых в " +
+                    "контексте нет); (2) подтверждают ли цитаты ключевой факт ответа. " +
+                    "Верни строго JSON: {\"supported\": true|false, \"reason\": \"...\"}"
+            )
+        }
+        return runCatching {
+            val r = callModel(
+                listOf(
+                    ChatMessage("system", "Ты — строгий проверяющий фактов. Отвечай только JSON."),
+                    ChatMessage("user", prompt)
+                ),
+                key, true, null
+            )
+            val c = r.content.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            val s = c.indexOf('{'); val e = c.lastIndexOf('}')
+            if (s < 0 || e <= s) return false
+            JSONObject(c.substring(s, e + 1)).optBoolean("supported", false)
+        }.getOrDefault(false)
+    }
+
+    /** RAG (День 22–24): вопрос → (опц.) rewrite → поиск чанков (filter/rerank) → контекст.
+     *  Возвращает null при выключенном RAG или ошибке MCP; passed=false, если ничего не прошло порог. */
+    private suspend fun buildRagOutcome(userMessage: String, force: Boolean = false): RagOutcome? {
         if (!force && !ragEnabled()) return null
         val source = ragSource().trim().ifBlank { "all" }
         val strategy = ragStrategy().trim().ifBlank { "structure" }
@@ -970,22 +1119,39 @@ class ChatAgent(
             val j = JSONObject(raw)
             if (!j.optBoolean("ok", false)) return null
             val results = j.optJSONArray("results") ?: return null
-            if (results.length() == 0) return null
-            val sb = StringBuilder("Контекст из базы знаний (RAG, source=$source, strategy=$strategy):\n")
-            for (i in 0 until results.length()) {
-                val r = results.getJSONObject(i)
-                sb.append("- [").append("%.4f".format(r.optDouble("score", 0.0))).append("] ")
-                    .append(r.optString("section", "")).append(" (")
-                    .append(r.optString("source", "")).append(")\n  ")
-                    .append(r.optString("snippet", "")).append("\n")
-            }
             Log.d(
                 "AGENT",
                 "rag: query=\"${query.take(80)}\" rewritten=${query != userMessage} " +
                     "chunks=${results.length()} source=$source strategy=$strategy " +
                     "topK=${ragTopK()} fetchK=${ragFetchK()} minScore=$minScore rerank=$rerank"
             )
-            sb.toString().trimEnd()
+            // Анти-галлюцинации (День 24): если ничего не прошло порог — контекста нет.
+            if (results.length() == 0) {
+                return RagOutcome(
+                    context = "Контекст из базы знаний (RAG): релевантных данных не найдено " +
+                        "(релевантность ниже порога $minScore).",
+                    passed = false
+                )
+            }
+            val sb = StringBuilder(
+                "Контекст из базы знаний (RAG, source=$source, strategy=$strategy). " +
+                    "Отвечай, опираясь ТОЛЬКО на этот контекст.\n"
+            )
+            for (i in 0 until results.length()) {
+                val r = results.getJSONObject(i)
+                sb.append("[").append(i + 1).append("] ")
+                    .append(r.optString("source", "")).append(" :: ")
+                    .append(r.optString("section", "")).append(" (")
+                    .append(r.optString("chunk_id", "")).append(", score ")
+                    .append("%.3f".format(r.optDouble("score", 0.0))).append(")\n")
+                    .append(r.optString("snippet", "")).append("\n\n")
+            }
+            sb.append(
+                "Отвечай, опираясь ТОЛЬКО на этот контекст. " +
+                    "Если в контексте нет ответа или релевантность низкая — ответь «Не знаю» " +
+                    "и попроси уточнение; не выдумывай факты."
+            )
+            RagOutcome(context = sb.toString().trimEnd(), passed = true)
         } catch (e: Exception) {
             Log.d("AGENT", "rag: failed: ${e.message}")
             null
