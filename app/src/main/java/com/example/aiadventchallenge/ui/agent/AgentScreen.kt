@@ -492,6 +492,29 @@ text = {
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
+                                text = stringResource(R.string.settings_task_memory),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settings.taskMemory,
+                                onCheckedChange = { onChange(settings.copy(taskMemory = it)) }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.settings_task_memory_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
                                 text = stringResource(R.string.settings_mcp),
                                 style = MaterialTheme.typography.bodyMedium
                             )

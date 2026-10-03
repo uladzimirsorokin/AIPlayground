@@ -144,6 +144,21 @@ retry and a final «Не знаю» fallback. If no chunk passes the relevance t
 «Не знаю» without calling the model. `rag_eval.py` verifies sources / quotes / grounded / faithful
 and runs an out-of-corpus «не знаю» test.
 
+### Mini-chat with RAG + task memory (Day 25)
+
+`tools/rag_chat.py` is a production-like CLI chat: it keeps the dialogue history **and a task
+memory** (`goal` / `clarified` / `constraints` / `terms`, refreshed by an extra LLM call after each
+turn and injected into the system prompt). Every question goes through RAG retrieval
+(rewrite / rerank / min_score) and is answered as strict JSON `{answer, sources, quotes}` with
+validation + one retry; **sources are always printed** (falling back to the retrieved chunks if the
+model omits them). Empty context → «Не знаю». Session state is saved under `tools/rag_chat/`.
+
+```bash
+LLM_API_KEY=... .venv/bin/python tools/rag_chat.py --source docs/DnD --strategy structure --rerank
+# long-scenario runs (10–15 turns each) with a report:
+LLM_API_KEY=... .venv/bin/python tools/rag_chat.py --script tools/rag_chat/scenarios/dnd_character.json
+```
+
 > **HTTP 421 «Invalid host header»?** The MCP SDK (2.x) validates the `Host` header
 > (DNS-rebinding protection). `tools/mcp_server.py` already listens on `0.0.0.0` and allows
 > `10.0.2.2` in `TransportSecuritySettings.allowed_hosts` — if you still get 421, make sure

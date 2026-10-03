@@ -90,6 +90,8 @@
     <string name="settings_longterm">Долговременная память</string>
     <string name="settings_longterm_desc">Извлекает профиль, решения и знания в отдельный слой памяти (доп. LLM-вызов после каждого ответа) и подмешивает их в каждый запрос.</string>
     <string name="settings_task">Состояние задачи</string>
+    <string name="settings_task_memory">Память задачи</string>
+    <string name="settings_task_memory_desc">Отдельным LLM-вызовом фиксирует цель диалога, уточнения, ограничения и термины; подмешивается в каждый запрос, чтобы не терять контекст.</string>
     <string name="settings_task_desc">Этап/шаг/ожидаемое действие формализуются конечным автоматом (доп. LLM-вызов после ответа) и подмешиваются в каждый запрос. Пауза работает на любом этапе.</string>
     <string name="settings_invariants">Инварианты</string>
     <string name="settings_invariants_desc">Правила, которые ассистент не имеет права нарушать (архитектура, решения, стек, бизнес-правила). Подмешиваются в каждый запрос.</string>

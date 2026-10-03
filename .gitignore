@@ -31,3 +31,5 @@ tools/mcp_notes.db-*
 tools/index/
 tools/rag_eval/report.md
 tools/test/
+tools/rag_chat/state*.json
+tools/rag_chat/reports/

@@ -21,9 +21,11 @@ import com.example.aiadventchallenge.data.agent.InvariantCategory
 import com.example.aiadventchallenge.data.agent.PrefsInvariantsStore
 import com.example.aiadventchallenge.data.agent.PrefsProfileStore
 import com.example.aiadventchallenge.data.agent.PrefsTaskStateStore
+import com.example.aiadventchallenge.data.agent.PrefsTaskMemoryStore
 import com.example.aiadventchallenge.data.agent.PrefsWorkingStore
 import com.example.aiadventchallenge.data.agent.SavedProfile
 import com.example.aiadventchallenge.data.agent.SqliteLongTermStore
+import com.example.aiadventchallenge.data.agent.TaskMemory
 import com.example.aiadventchallenge.data.agent.TaskState
 import com.example.aiadventchallenge.data.agent.TaskStage
 import com.example.aiadventchallenge.data.agent.TransitionResult
@@ -43,6 +45,7 @@ data class AgentSettings(
     val historyWindow: Int,
     val longTerm: Boolean,
     val taskState: Boolean,
+    val taskMemory: Boolean,
     val invariants: Boolean,
     val invariantGuard: Boolean,
     val mcp: Boolean,
@@ -98,6 +101,7 @@ class AgentViewModel(
             historyWindow = prefs.getInt("agent_history_window", 10),
             longTerm = prefs.getBoolean("agent_longterm", true),
             taskState = prefs.getBoolean("agent_task_state", true),
+            taskMemory = prefs.getBoolean("agent_task_memory", true),
             invariants = prefs.getBoolean("agent_invariants", true),
             invariantGuard = prefs.getBoolean("agent_invariants_guard", true),
             mcp = prefs.getBoolean("agent_mcp", true),
@@ -121,6 +125,7 @@ class AgentViewModel(
     private val longTermStore = SqliteLongTermStore(getApplication())
     private val profileStore = PrefsProfileStore(getApplication())
     private val taskStateStore = PrefsTaskStateStore(getApplication()) { _settings.value.team }
+    private val taskMemoryStore = PrefsTaskMemoryStore(getApplication()) { _settings.value.team }
     private val invariantsStore = PrefsInvariantsStore(getApplication())
 
     private val agent = ChatAgent(
@@ -139,6 +144,8 @@ class AgentViewModel(
         profileStore = profileStore,
         taskStateStore = taskStateStore,
         taskStateEnabled = { _settings.value.taskState },
+        taskMemoryStore = taskMemoryStore,
+        taskMemoryEnabled = { _settings.value.taskMemory },
         invariantsStore = invariantsStore,
         invariantsEnabled = { _settings.value.invariants },
         invariantGuardEnabled = { _settings.value.invariantGuard },
@@ -395,7 +402,15 @@ class AgentViewModel(
                     append("\n\n").append(it)
                 }
             }
+            if (_settings.value.taskMemory) {
+                agent.taskMemoryText.takeIf { it.isNotBlank() }?.let {
+                    append("\n\n").append(it)
+                }
+            }
         }
+
+    /** Память задачи (День 25) — для отображения в UI. */
+    val taskMemory: TaskMemory get() = agent.taskMemoryState
 
     private val _branchNames = MutableStateFlow(agent.branchNames)
     val branchNames: StateFlow<List<String>> = _branchNames.asStateFlow()
@@ -501,6 +516,7 @@ class AgentViewModel(
             .putInt("agent_history_window", new.historyWindow)
             .putBoolean("agent_longterm", new.longTerm)
             .putBoolean("agent_task_state", new.taskState)
+            .putBoolean("agent_task_memory", new.taskMemory)
             .putBoolean("agent_invariants", new.invariants)
             .putBoolean("agent_invariants_guard", new.invariantGuard)
             .putBoolean("agent_mcp", new.mcp)
@@ -520,7 +536,10 @@ class AgentViewModel(
         }
         _settings.value = new
         // Смена команды = смена скоупа рабочей памяти: перечитываем её из стора новой команды.
-        if (teamChanged) agent.reloadWorkingMemory()
+        if (teamChanged) {
+            agent.reloadWorkingMemory()
+            agent.reloadTaskMemory()
+        }
     }
 
     fun clearChat() {

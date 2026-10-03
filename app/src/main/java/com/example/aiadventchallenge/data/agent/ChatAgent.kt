@@ -48,6 +48,8 @@ class ChatAgent(
     private val profileStore: ProfileStore,
     private val taskStateStore: TaskStateStore,
     private val taskStateEnabled: () -> Boolean,
+    private val taskMemoryStore: TaskMemoryStore,
+    private val taskMemoryEnabled: () -> Boolean,
     private val invariantsStore: InvariantsStore,
     private val invariantsEnabled: () -> Boolean,
     private val invariantGuardEnabled: () -> Boolean,
@@ -125,11 +127,23 @@ class ChatAgent(
         store = taskStateStore
     )
 
+    private val taskMemory = TaskMemoryManager(
+        client = client,
+        model = model,
+        store = taskMemoryStore
+    )
+
     val taskState: TaskState get() = taskMachine.state
 
     val taskPaused: Boolean get() = taskMachine.paused
 
     val taskSummaryText: String get() = taskMachine.summaryText
+
+    /** Память задачи (День 25): цель/уточнения/ограничения/термины. */
+    val taskMemoryState: TaskMemory get() = taskMemory.memory
+    val taskMemoryText: String get() = taskMemory.text
+    fun clearTaskMemory() = taskMemory.clear()
+    fun reloadTaskMemory() = taskMemory.reload()
 
     fun pauseTask() = taskMachine.pause()
 
@@ -447,6 +461,10 @@ class ChatAgent(
             if (taskStateEnabled()) {
                 taskMachine.summaryText.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             }
+            // Память задачи (День 25): цель/уточнения/ограничения/термины.
+            if (taskMemoryEnabled()) {
+                taskMemory.text.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
+            }
             // RAG: контекст из базы знаний (День 22).
             ragContext?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             when (strat) {
@@ -509,6 +527,7 @@ class ChatAgent(
         workingStore.saveSummary(memory.summary)
         memory.consolidate(key, userMessage, reply)
         if (taskStateEnabled()) taskMachine.updateState(key, userMessage, reply)
+        if (taskMemoryEnabled()) taskMemory.update(key, userMessage, reply)
         Log.d(
             "AGENT",
             "done: model=${result.model} in=${result.promptTokens} out=${result.completionTokens} " +
@@ -1082,24 +1101,30 @@ class ChatAgent(
         val endpoints = mcpEndpointsList()
         if (endpoints.isEmpty()) return null
         return try {
-            // Query rewrite (День 23): перефразируем вопрос в поисковый запрос (один LLM-вызов).
+            // Query rewrite (День 23–25): перефразируем вопрос в поисковый запрос с учётом памяти
+            // задачи и недавнего диалога, чтобы местоимения («он», «его») разрешались в сущности.
             var query = userMessage
             if (ragRewrite()) {
                 val key = apiKey()
                 if (key != null) {
-                    runCatching {
-                        callModel(
-                            listOf(
-                                ChatMessage(
-                                    "user",
-                                    "Сформулируй КОРОТКИЙ поисковый запрос (3–6 слов) по смыслу вопроса: " +
-                                        "только ключевые сущности, без перечислений и синонимов. " +
-                                        "Верни ТОЛЬКО запрос, без пояснений.\n\nВопрос: $userMessage"
-                                )
-                            ),
-                            key, false, null
-                        ).content.trim()
-                    }.getOrNull()?.takeIf { it.isNotBlank() }?.let { query = it }
+                    val recent = _history.dropLast(1).takeLast(4)
+                        .joinToString("\n") { "${it.role}: ${it.content.take(300)}" }
+                    val prompt = buildString {
+                        append("Сформулируй КОРОТКИЙ поисковый запрос (3–6 слов) по смыслу вопроса: ")
+                        append("только ключевые сущности, без перечислений и синонимов. ")
+                        append("Если в вопросе есть местоимения («он», «его», «это») — замени их на ")
+                        append("конкретные имена/термины из памяти задачи и истории диалога.\n")
+                        if (taskMemoryEnabled()) {
+                            taskMemory.text.takeIf { it.isNotBlank() }?.let { append("\n$it\n") }
+                        }
+                        if (recent.isNotBlank()) append("\nНедавний диалог:\n$recent\n")
+                        append("\nВопрос: ").append(userMessage)
+                        append("\nВерни ТОЛЬКО поисковый запрос, без пояснений и без предложений.")
+                    }
+                    callModel(listOf(ChatMessage("user", prompt)), key, false, null)
+                        .content.trim()
+                        .takeIf(::looksLikeSearchQuery)
+                        ?.let { query = it }
                 }
             }
 
@@ -1156,6 +1181,17 @@ class ChatAgent(
             Log.d("AGENT", "rag: failed: ${e.message}")
             null
         }
+    }
+
+    /** Пригоден ли ответ rewrite как поисковый запрос (короткий, без пояснений/жалоб). */
+    private fun looksLikeSearchQuery(s: String): Boolean {
+        if (s.isBlank()) return false
+        if (s.length > 80) return false           // это уже объяснение, а не запрос
+        if (s.lines().size > 1) return false      // многострочный ответ
+        if (s.count { it == '.' || it == '!' || it == '?' } > 0) return false // предложением
+        val low = s.lowercase()
+        val bad = listOf("не хватает", "неизвестно", "укажите", "уточните", "например", "невозможно", "нельзя")
+        return bad.none { low.contains(it) }
     }
 
     private fun McpTool.toChatTool(): ChatTool? {
