@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.data.ChatMessage
+import com.example.aiadventchallenge.data.LlmProvider
 import com.example.aiadventchallenge.data.agent.ContextStrategy
 import com.example.aiadventchallenge.data.agent.Invariant
 import com.example.aiadventchallenge.data.agent.InvariantCategory
@@ -396,6 +397,70 @@ text = {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
+                            text = stringResource(R.string.settings_provider),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        ProviderDropdown(
+                            selected = settings.provider,
+                            onSelect = { onChange(settings.copy(provider = it)) }
+                        )
+                        Text(
+                            text = stringResource(
+                                if (settings.provider == LlmProvider.LOCAL)
+                                    R.string.settings_provider_local_desc
+                                else R.string.settings_provider_cloud_desc
+                            ),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                if (settings.provider == LlmProvider.LOCAL) {
+                    item {
+                        OutlinedTextField(
+                            value = settings.localEndpoint,
+                            onValueChange = { onChange(settings.copy(localEndpoint = it)) },
+                            label = { Text(stringResource(R.string.settings_local_endpoint)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = settings.localModel,
+                            onValueChange = { onChange(settings.copy(localModel = it)) },
+                            label = { Text(stringResource(R.string.settings_local_model)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_local_robust),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Switch(
+                                    checked = settings.localRobust,
+                                    onCheckedChange = { onChange(settings.copy(localRobust = it)) }
+                                )
+                            }
+                            Text(
+                                text = stringResource(R.string.settings_local_robust_desc),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
                             text = stringResource(R.string.settings_temperature, settings.temperature),
                             style = MaterialTheme.typography.bodyMedium
                         )
@@ -407,17 +472,19 @@ text = {
                     }
                 }
 
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = stringResource(R.string.settings_model),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        ModelDropdown(
-                            selected = settings.model,
-                            models = models,
-                            onSelect = { onChange(settings.copy(model = it)) }
-                        )
+                if (settings.provider == LlmProvider.CLOUD) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = stringResource(R.string.settings_model),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            ModelDropdown(
+                                selected = settings.model,
+                                models = models,
+                                onSelect = { onChange(settings.copy(model = it)) }
+                            )
+                        }
                     }
                 }
 
@@ -1105,6 +1172,32 @@ private fun StageDropdown(
     }
 }
 
+
+@Composable
+private fun ProviderDropdown(
+    selected: LlmProvider,
+    onSelect: (LlmProvider) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text(stringResource(if (selected == LlmProvider.LOCAL) R.string.provider_local else R.string.provider_cloud))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            LlmProvider.values().forEach { p ->
+                DropdownMenuItem(
+                    text = {
+                        Text(stringResource(if (p == LlmProvider.LOCAL) R.string.provider_local else R.string.provider_cloud))
+                    },
+                    onClick = {
+                        onSelect(p)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun ModelDropdown(

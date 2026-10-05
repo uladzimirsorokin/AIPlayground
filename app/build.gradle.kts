@@ -12,6 +12,11 @@ val llmModelWeak = localProperties.getProperty("LLM_MODEL_WEAK", "meta-llama/lla
 val llmModelMedium = localProperties.getProperty("LLM_MODEL_MEDIUM", "deepseek/deepseek-chat")
 val llmModelStrong = localProperties.getProperty("LLM_MODEL_STRONG", "z-ai/glm-5.3")
 val llmModelTest = localProperties.getProperty("LLM_MODEL_TEST", "")
+val llmLocalEndpoint = localProperties.getProperty(
+    "LLM_LOCAL_ENDPOINT",
+    "http://10.0.2.2:11434/v1/chat/completions"
+)
+val llmLocalModel = localProperties.getProperty("LLM_LOCAL_MODEL", "llama3.2:3b")
 val llmContextLimit = localProperties.getProperty("LLM_CONTEXT_LIMIT", "131072")
 val mcpEndpoint = localProperties.getProperty("MCP_ENDPOINT", "")
 val mcpEndpoint2 = localProperties.getProperty("MCP_ENDPOINT2", "http://10.0.2.2:8001/mcp")
@@ -40,6 +45,8 @@ android {
         buildConfigField("String", "LLM_MODEL_MEDIUM", "\"$llmModelMedium\"")
         buildConfigField("String", "LLM_MODEL_STRONG", "\"$llmModelStrong\"")
         buildConfigField("String", "LLM_MODEL_TEST", "\"$llmModelTest\"")
+        buildConfigField("String", "LLM_LOCAL_ENDPOINT", "\"$llmLocalEndpoint\"")
+        buildConfigField("String", "LLM_LOCAL_MODEL", "\"$llmLocalModel\"")
         buildConfigField("int", "LLM_CONTEXT_LIMIT", "$llmContextLimit")
         buildConfigField("String", "MCP_ENDPOINT", "\"$mcpEndpoint\"")
         buildConfigField("String", "MCP_ENDPOINT2", "\"$mcpEndpoint2\"")

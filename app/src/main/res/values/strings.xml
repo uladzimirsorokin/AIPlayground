@@ -169,6 +169,15 @@
     <string name="settings_team_desc">Рабочая память (резюме и факты) общая для всех агентов с одинаковой командой. Краткосрочная — своя у каждого агента.</string>
     <string name="settings_temperature">Температура: %1$.1f</string>
     <string name="settings_model">Модель</string>
+    <string name="settings_provider">Провайдер LLM</string>
+    <string name="provider_cloud">Облако (OpenRouter)</string>
+    <string name="provider_local">Локальная (Ollama)</string>
+    <string name="settings_provider_cloud_desc">Запросы идут в облачный OpenAI-совместимый API (нужен API-ключ с главного экрана).</string>
+    <string name="settings_provider_local_desc">Запросы идут на локальный OpenAI-совместимый сервер (Ollama/LM Studio). API-ключ не требуется. Для эмулятора хост — 10.0.2.2.</string>
+    <string name="settings_local_endpoint">Эндпоинт локальной модели</string>
+    <string name="settings_local_model">Модель локальная</string>
+    <string name="settings_local_robust">Устойчивость (retry + anti-repeat)</string>
+    <string name="settings_local_robust_desc">Штраф за повторы и один повтор запроса при сбое — лечит «token repeat limit reached» у слабых локальных моделей. Выключайте, если нужен строгий детерминизм.</string>
     <string name="settings_json">JSON-формат ответа</string>
     <string name="settings_compact">Сжатие контекста при переполнении</string>
     <string name="settings_strategy">Стратегия контекста</string>

@@ -1,5 +1,6 @@
 package com.example.aiadventchallenge.data
 
+import android.util.Log
 import com.example.aiadventchallenge.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -50,13 +51,15 @@ data class CompletionResult(
  * Minimal OpenAI-compatible chat completions client.
  * Sends a POST to {baseUrl}/v1/chat/completions and returns the assistant message.
  */
-class LlmClient(
+open class LlmClient(
     private val baseUrl: String = BuildConfig.LLM_BASE_URL,
     private val endpoint: String = BuildConfig.LLM_ENDPOINT,
-    private val model: String = BuildConfig.LLM_MODEL
+    private val model: String = BuildConfig.LLM_MODEL,
+    /** Локальные модели: штраф за повторы + один повтор при сбое (retry с чуть большей температурой). */
+    private val antiRepeat: Boolean = false
 ) {
 
-    suspend fun complete(
+    open suspend fun complete(
         prompt: String,
         apiKey: String,
         systemPrompt: String? = null,
@@ -74,7 +77,7 @@ class LlmClient(
         return postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature, null).content
     }
 
-    suspend fun completeDetailed(
+    open suspend fun completeDetailed(
         prompt: String,
         apiKey: String,
         model: String,
@@ -87,7 +90,7 @@ class LlmClient(
         return postChat(messages, apiKey, model, null, null, null, null, null)
     }
 
-    suspend fun completeChat(
+    open suspend fun completeChat(
         messages: List<ChatMessage>,
         apiKey: String,
         model: String = this.model,
@@ -110,6 +113,37 @@ class LlmClient(
         temperature: Double?,
         tools: List<ChatTool>?
     ): CompletionResult = withContext(Dispatchers.IO) {
+        val attempts = if (antiRepeat) 2 else 1
+        var lastError: Exception? = null
+        for (attempt in 0 until attempts) {
+            try {
+                return@withContext executeOnce(
+                    messages, apiKey, model, maxTokens, stop, responseFormat,
+                    if (attempt == 0) temperature else bumpTemperature(temperature),
+                    tools
+                )
+            } catch (e: Exception) {
+                lastError = e
+                Log.d("LLM", "postChat attempt ${attempt + 1}/$attempts failed: ${e.message}")
+            }
+        }
+        throw lastError ?: IllegalStateException("LLM request failed")
+    }
+
+    /** При повторе слегка поднимаем температуру, чтобы разорвать цикл повторов слабой модели. */
+    private fun bumpTemperature(t: Double?): Double = ((t ?: 0.7) + 0.3).coerceAtMost(2.0)
+
+    /** Один HTTP-запрос без retry; блокирующий, вызывается внутри Dispatchers.IO. */
+    private fun executeOnce(
+        messages: List<ChatMessage>,
+        apiKey: String,
+        model: String,
+        maxTokens: Int?,
+        stop: List<String>?,
+        responseFormat: String?,
+        temperature: Double?,
+        tools: List<ChatTool>?
+    ): CompletionResult {
         val start = System.currentTimeMillis()
         val url = URL(endpoint.ifBlank { "$baseUrl/v1/chat/completions" })
         val connection = url.openConnection() as HttpURLConnection
@@ -119,7 +153,8 @@ class LlmClient(
             connection.readTimeout = 120_000
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("Authorization", "Bearer $apiKey")
+            // Локальные серверы (Ollama/LM Studio) не требуют ключа — не шлём пустой Bearer.
+            if (apiKey.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $apiKey")
             connection.doOutput = true
 
             val messagesArray = JSONArray()
@@ -184,6 +219,11 @@ class LlmClient(
             stop?.let { body.put("stop", JSONArray().apply { it.forEach(::put) }) }
             responseFormat?.let { body.put("response_format", JSONObject().put("type", it)) }
             temperature?.let { body.put("temperature", it) }
+            // Против зацикливания локальных моделей (Ollama: «token repeat limit reached»).
+            if (antiRepeat) {
+                body.put("frequency_penalty", 0.4)
+                body.put("presence_penalty", 0.3)
+            }
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
 
             val code = connection.responseCode
@@ -216,7 +256,7 @@ class LlmClient(
                 }
             } ?: emptyList()
             val usage = json.optJSONObject("usage")
-            CompletionResult(
+            return CompletionResult(
                 content = content,
                 promptTokens = usage?.optInt("prompt_tokens", 0) ?: 0,
                 completionTokens = usage?.optInt("completion_tokens", 0) ?: 0,

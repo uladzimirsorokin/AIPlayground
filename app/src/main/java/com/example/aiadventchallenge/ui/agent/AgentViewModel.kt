@@ -10,6 +10,8 @@ import com.example.aiadventchallenge.R
 import com.example.aiadventchallenge.data.ChatMessage
 import com.example.aiadventchallenge.data.KeyStorage
 import com.example.aiadventchallenge.data.LlmClient
+import com.example.aiadventchallenge.data.LlmProvider
+import com.example.aiadventchallenge.data.RoutingLlmClient
 import com.example.aiadventchallenge.data.agent.AgentStats
 import com.example.aiadventchallenge.data.agent.ChatAgent
 import com.example.aiadventchallenge.data.agent.ContextStrategy
@@ -38,6 +40,10 @@ import kotlinx.coroutines.launch
 
 data class AgentSettings(
     val systemPrompt: String,
+    val provider: LlmProvider,
+    val localEndpoint: String,
+    val localModel: String,
+    val localRobust: Boolean,
     val temperature: Float,
     val model: String,
     val jsonFormat: Boolean,
@@ -91,6 +97,14 @@ class AgentViewModel(
         AgentSettings(
             systemPrompt = prefs.getString("system_prompt", null)
                 ?: "Ты — полезный и краткий ассистент. Отвечай по делу, без лишней воды.",
+            provider = runCatching {
+                LlmProvider.valueOf(prefs.getString("agent_provider", null) ?: "")
+            }.getOrDefault(LlmProvider.CLOUD),
+            localEndpoint = prefs.getString("agent_local_endpoint", null)
+                ?.takeIf { it.isNotBlank() } ?: BuildConfig.LLM_LOCAL_ENDPOINT,
+            localModel = prefs.getString("agent_local_model", null)
+                ?.takeIf { it.isNotBlank() } ?: BuildConfig.LLM_LOCAL_MODEL,
+            localRobust = prefs.getBoolean("agent_local_robust", true),
             temperature = prefs.getFloat("agent_temperature", 0.7f),
             model = prefs.getString("agent_model", BuildConfig.LLM_MODEL)
                 ?: BuildConfig.LLM_MODEL,
@@ -129,10 +143,22 @@ class AgentViewModel(
     private val invariantsStore = PrefsInvariantsStore(getApplication())
 
     private val agent = ChatAgent(
-        client = LlmClient(),
+        client = RoutingLlmClient(
+            provider = { _settings.value.provider },
+            cloud = LlmClient(),
+            localEndpoint = { _settings.value.localEndpoint },
+            localModel = { _settings.value.localModel },
+            robustLocal = { _settings.value.localRobust }
+        ),
         systemPrompt = { _settings.value.systemPrompt },
-        apiKey = { KeyStorage.load(getApplication()) },
-        model = { _settings.value.model },
+        apiKey = {
+            // Локальная модель (Ollama/LM Studio) не требует ключа.
+            if (_settings.value.provider == LlmProvider.LOCAL) "" else KeyStorage.load(getApplication())
+        },
+        model = {
+            if (_settings.value.provider == LlmProvider.LOCAL) _settings.value.localModel
+            else _settings.value.model
+        },
         temperature = { _settings.value.temperature.toDouble() },
         jsonFormat = { _settings.value.jsonFormat },
         strategy = { _settings.value.strategy },
@@ -509,6 +535,10 @@ class AgentViewModel(
         val teamChanged = new.team != _settings.value.team
         prefs.edit()
             .putString("system_prompt", new.systemPrompt)
+            .putString("agent_provider", new.provider.name)
+            .putString("agent_local_endpoint", new.localEndpoint.trim())
+            .putString("agent_local_model", new.localModel.trim())
+            .putBoolean("agent_local_robust", new.localRobust)
             .putFloat("agent_temperature", new.temperature)
             .putString("agent_model", new.model)
             .putBoolean("agent_json_format", new.jsonFormat)
