@@ -16,12 +16,14 @@ constraints / terms) сохраняются в tools/rag_chat/state_<session>.js
 
 Запуск:
   .venv/bin/python tools/rag_chat.py --source docs/DnD --strategy structure
+  .venv/bin/python tools/rag_chat.py --local            # полностью локально (День 28): ollama, без ключа
   .venv/bin/python tools/rag_chat.py --script tools/rag_chat/scenarios/dnd_character.json
 """
 
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -260,6 +262,10 @@ def main() -> int:
     ap.add_argument("--rewrite", action="store_true")
     ap.add_argument("--script", help="JSON-сценарий (10–15 сообщений) для прогона")
     ap.add_argument("--session", default="default")
+    ap.add_argument("--local", action="store_true",
+                    help="Полностью локально (День 28): генерация через ollama, API-ключ не нужен")
+    ap.add_argument("--local-endpoint", default="http://localhost:11434/v1/chat/completions")
+    ap.add_argument("--local-model", default="llama3.2:3b")
     args = ap.parse_args()
 
     index_path = di.index_path(args.source, args.strategy, args.embedding)
@@ -269,10 +275,14 @@ def main() -> int:
         return 1
     index = di.load_index(args.source, args.strategy, args.embedding)
     endpoint, model, key = re_.llm_config()
-    if not key:
+    if args.local:
+        # Локальная генерация: эндпоинт Ollama, пустой ключ (локальные серверы его не требуют).
+        endpoint, model, key = args.local_endpoint, args.local_model, ""
+    if not key and not args.local:
         print("Нет LLM_API_KEY (env). Ключ не хранится в репозитории.")
         return 1
-    print(f"Индекс: {index_path} ({len(index['chunks'])} чанков) · модель {model}")
+    where = "локально (ollama)" if args.local else "облако"
+    print(f"Индекс: {index_path} ({len(index['chunks'])} чанков) · генерация: {where} · модель {model}")
 
     chat = RagChat(build_cfg(args), index, endpoint, model, key)
 
