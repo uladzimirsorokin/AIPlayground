@@ -456,6 +456,22 @@ text = {
                             )
                         }
                     }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = stringResource(R.string.settings_reasoning_effort),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            ReasoningEffortDropdown(
+                                selected = settings.reasoningEffort,
+                                onSelect = { onChange(settings.copy(reasoningEffort = it)) }
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_reasoning_effort_desc),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
                 }
 
                 item {
@@ -470,6 +486,16 @@ text = {
                             valueRange = 0f..2f
                         )
                     }
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = settings.maxTokens,
+                        onValueChange = { onChange(settings.copy(maxTokens = it.filter { c -> c.isDigit() }.take(6))) },
+                        label = { Text(stringResource(R.string.settings_max_tokens)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
                 }
 
                 if (settings.provider == LlmProvider.CLOUD) {
@@ -1191,6 +1217,36 @@ private fun ProviderDropdown(
                     },
                     onClick = {
                         onSelect(p)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReasoningEffortDropdown(
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    val options = listOf(
+        "" to stringResource(R.string.reasoning_default),
+        "low" to stringResource(R.string.reasoning_low),
+        "medium" to stringResource(R.string.reasoning_medium),
+        "high" to stringResource(R.string.reasoning_high)
+    )
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text(options.firstOrNull { it.first == selected }?.second ?: options.first().second, maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onSelect(value)
                         expanded = false
                     }
                 )

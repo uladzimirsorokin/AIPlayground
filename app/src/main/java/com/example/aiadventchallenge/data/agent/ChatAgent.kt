@@ -38,6 +38,8 @@ class ChatAgent(
     private val apiKey: () -> String?,
     private val model: () -> String,
     private val temperature: () -> Double?,
+    private val maxTokens: () -> Int?,
+    private val reasoningEffort: () -> String?,
     private val jsonFormat: () -> Boolean,
     private val strategy: () -> ContextStrategy,
     private val historyWindow: () -> Int,
@@ -774,9 +776,11 @@ class ChatAgent(
         messages,
         key,
         model = model(),
+        maxTokens = maxTokens(),
         responseFormat = if (json) "json_object" else null,
         temperature = temperature(),
-        tools = tools
+        tools = tools,
+        reasoningEffort = reasoningEffort()
     )
 
     /** function-calling цикл через несколько MCP-серверов (День 20): подключаемся ко всем

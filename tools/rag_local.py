@@ -48,11 +48,16 @@ ANSWER_SYS = (
 
 # --- LLM ----------------------------------------------------------------
 
-def http_chat(endpoint, model, key, messages, temperature=0.3, json_mode=True, timeout=300):
+def http_chat(endpoint, model, key, messages, temperature=0.3, json_mode=True, timeout=300,
+              max_tokens=None, reasoning_effort=None):
     """OpenAI-совместимый вызов. Возвращает content/usage/latency. Пустой key — локальный сервер."""
     body = {"model": model, "messages": messages, "temperature": temperature}
     if json_mode:
         body["response_format"] = {"type": "json_object"}
+    if max_tokens:
+        body["max_tokens"] = max_tokens
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if key:

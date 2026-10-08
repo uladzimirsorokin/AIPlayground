@@ -50,8 +50,9 @@ class RoutingLlmClient(
         stop: List<String>?,
         responseFormat: String?,
         temperature: Double?,
-        tools: List<ChatTool>?
+        tools: List<ChatTool>?,
+        reasoningEffort: String?
     ): CompletionResult = active().completeChat(
-        messages, apiKey, model, maxTokens, stop, responseFormat, temperature, tools
+        messages, apiKey, model, maxTokens, stop, responseFormat, temperature, tools, reasoningEffort
     )
 }

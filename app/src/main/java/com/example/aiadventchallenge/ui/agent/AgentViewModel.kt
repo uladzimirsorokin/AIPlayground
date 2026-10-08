@@ -45,6 +45,8 @@ data class AgentSettings(
     val localModel: String,
     val localRobust: Boolean,
     val temperature: Float,
+    val maxTokens: String,
+    val reasoningEffort: String,
     val model: String,
     val jsonFormat: Boolean,
     val strategy: ContextStrategy,
@@ -106,6 +108,8 @@ class AgentViewModel(
                 ?.takeIf { it.isNotBlank() } ?: BuildConfig.LLM_LOCAL_MODEL,
             localRobust = prefs.getBoolean("agent_local_robust", true),
             temperature = prefs.getFloat("agent_temperature", 0.7f),
+            maxTokens = prefs.getString("agent_max_tokens", "0") ?: "0",
+            reasoningEffort = prefs.getString("agent_reasoning_effort", "") ?: "",
             model = prefs.getString("agent_model", BuildConfig.LLM_MODEL)
                 ?: BuildConfig.LLM_MODEL,
             jsonFormat = prefs.getBoolean("agent_json_format", false),
@@ -160,6 +164,12 @@ class AgentViewModel(
             else _settings.value.model
         },
         temperature = { _settings.value.temperature.toDouble() },
+        maxTokens = { _settings.value.maxTokens.toIntOrNull()?.takeIf { it > 0 } },
+        // reasoning_effort имеет смысл для локальных reasoning-моделей (gpt-oss) — гейтим на LOCAL.
+        reasoningEffort = {
+            if (_settings.value.provider == LlmProvider.LOCAL)
+                _settings.value.reasoningEffort.takeIf { it.isNotBlank() } else null
+        },
         jsonFormat = { _settings.value.jsonFormat },
         strategy = { _settings.value.strategy },
         historyWindow = { _settings.value.historyWindow },
@@ -540,6 +550,8 @@ class AgentViewModel(
             .putString("agent_local_model", new.localModel.trim())
             .putBoolean("agent_local_robust", new.localRobust)
             .putFloat("agent_temperature", new.temperature)
+            .putString("agent_max_tokens", new.maxTokens.filter { it.isDigit() }.take(6))
+            .putString("agent_reasoning_effort", new.reasoningEffort)
             .putString("agent_model", new.model)
             .putBoolean("agent_json_format", new.jsonFormat)
             .putString("agent_strategy", new.strategy.name)

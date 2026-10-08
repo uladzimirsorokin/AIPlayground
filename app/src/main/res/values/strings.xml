@@ -178,6 +178,13 @@
     <string name="settings_local_model">Модель локальная</string>
     <string name="settings_local_robust">Устойчивость (retry + anti-repeat)</string>
     <string name="settings_local_robust_desc">Штраф за повторы и один повтор запроса при сбое — лечит «token repeat limit reached» у слабых локальных моделей. Выключайте, если нужен строгий детерминизм.</string>
+    <string name="settings_reasoning_effort">Reasoning effort (локальная)</string>
+    <string name="settings_reasoning_effort_desc">Для reasoning-моделей (gpt-oss): low сокращает «размышления» — ответ заметно быстрее и экономнее по токенам. Действует только для локального провайдера.</string>
+    <string name="reasoning_default">По умолчанию</string>
+    <string name="reasoning_low">low — быстрее</string>
+    <string name="reasoning_medium">medium</string>
+    <string name="reasoning_high">high — глубже</string>
+    <string name="settings_max_tokens">Максимум токенов ответа (0 = без лимита)</string>
     <string name="settings_json">JSON-формат ответа</string>
     <string name="settings_compact">Сжатие контекста при переполнении</string>
     <string name="settings_strategy">Стратегия контекста</string>

@@ -74,7 +74,7 @@ open class LlmClient(
             systemPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             add(ChatMessage("user", userContent))
         }
-        return postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature, null).content
+        return postChat(messages, apiKey, model, maxTokens, stop, responseFormat, temperature, null, null).content
     }
 
     open suspend fun completeDetailed(
@@ -87,7 +87,7 @@ open class LlmClient(
             systemPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage("system", it)) }
             add(ChatMessage("user", prompt))
         }
-        return postChat(messages, apiKey, model, null, null, null, null, null)
+        return postChat(messages, apiKey, model, null, null, null, null, null, null)
     }
 
     open suspend fun completeChat(
@@ -98,9 +98,10 @@ open class LlmClient(
         stop: List<String>? = null,
         responseFormat: String? = null,
         temperature: Double? = null,
-        tools: List<ChatTool>? = null
+        tools: List<ChatTool>? = null,
+        reasoningEffort: String? = null
     ): CompletionResult = postChat(
-        messages, apiKey, model, maxTokens, stop, responseFormat, temperature, tools
+        messages, apiKey, model, maxTokens, stop, responseFormat, temperature, tools, reasoningEffort
     )
 
     private suspend fun postChat(
@@ -111,7 +112,8 @@ open class LlmClient(
         stop: List<String>?,
         responseFormat: String?,
         temperature: Double?,
-        tools: List<ChatTool>?
+        tools: List<ChatTool>?,
+        reasoningEffort: String?
     ): CompletionResult = withContext(Dispatchers.IO) {
         val attempts = if (antiRepeat) 2 else 1
         var lastError: Exception? = null
@@ -120,7 +122,7 @@ open class LlmClient(
                 return@withContext executeOnce(
                     messages, apiKey, model, maxTokens, stop, responseFormat,
                     if (attempt == 0) temperature else bumpTemperature(temperature),
-                    tools
+                    tools, reasoningEffort
                 )
             } catch (e: Exception) {
                 lastError = e
@@ -142,7 +144,8 @@ open class LlmClient(
         stop: List<String>?,
         responseFormat: String?,
         temperature: Double?,
-        tools: List<ChatTool>?
+        tools: List<ChatTool>?,
+        reasoningEffort: String?
     ): CompletionResult {
         val start = System.currentTimeMillis()
         val url = URL(endpoint.ifBlank { "$baseUrl/v1/chat/completions" })
@@ -219,6 +222,9 @@ open class LlmClient(
             stop?.let { body.put("stop", JSONArray().apply { it.forEach(::put) }) }
             responseFormat?.let { body.put("response_format", JSONObject().put("type", it)) }
             temperature?.let { body.put("temperature", it) }
+            // reasoning_effort (low/medium/high) — для reasoning-моделей (gpt-oss и т.п.):
+            // low сокращает «размышления», ускоряя ответ и экономя токены.
+            reasoningEffort?.takeIf { it.isNotBlank() }?.let { body.put("reasoning_effort", it) }
             // Против зацикливания локальных моделей (Ollama: «token repeat limit reached»).
             if (antiRepeat) {
                 body.put("frequency_penalty", 0.4)
