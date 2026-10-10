@@ -1,0 +1,42 @@
+# Приватный AI-сервис: Ollama + шлюз с auth/rate-limit/context-cap.
+# Запуск:  GATEWAY_API_KEY=$(openssl rand -hex 16) docker compose up -d
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_CONTEXT_LENGTH: "8192"
+      OLLAMA_NUM_PARALLEL: "2"
+    restart: unless-stopped
+    # Для NVIDIA GPU (VPS/сервер с CUDA) раскомментируйте:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  gateway:
+    build: .
+    environment:
+      UPSTREAM: "http://ollama:11434"
+      GATEWAY_HOST: "0.0.0.0"
+      GATEWAY_PORT: "8080"
+      GATEWAY_API_KEY: "${GATEWAY_API_KEY:?set GATEWAY_API_KEY}"
+      RATE_LIMIT_PER_MIN: "20"
+      MAX_CONTEXT_TOKENS: "8192"
+      MAX_OUTPUT_TOKENS: "1024"
+      DEFAULT_MODEL: "gpt-oss:20b"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama:

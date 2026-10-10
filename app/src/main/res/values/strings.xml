@@ -176,6 +176,8 @@
     <string name="settings_provider_local_desc">Запросы идут на локальный OpenAI-совместимый сервер (Ollama/LM Studio). API-ключ не требуется. Для эмулятора хост — 10.0.2.2.</string>
     <string name="settings_local_endpoint">Эндпоинт локальной модели</string>
     <string name="settings_local_model">Модель локальная</string>
+    <string name="settings_local_api_key">API-ключ шлюза (необязательно)</string>
+    <string name="settings_local_api_key_desc">Для приватного сервиса (gateway за Tailscale Funnel): ключ уходит в заголовке Authorization. Пусто — прямое подключение к Ollama без ключа. Хранится зашифрованным в Keystore.</string>
     <string name="settings_local_robust">Устойчивость (retry + anti-repeat)</string>
     <string name="settings_local_robust_desc">Штраф за повторы и один повтор запроса при сбое — лечит «token repeat limit reached» у слабых локальных моделей. Выключайте, если нужен строгий детерминизм.</string>
     <string name="settings_reasoning_effort">Reasoning effort (локальная)</string>

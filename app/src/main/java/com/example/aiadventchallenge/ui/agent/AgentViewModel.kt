@@ -43,6 +43,7 @@ data class AgentSettings(
     val provider: LlmProvider,
     val localEndpoint: String,
     val localModel: String,
+    val localApiKey: String,
     val localRobust: Boolean,
     val temperature: Float,
     val maxTokens: String,
@@ -106,6 +107,7 @@ class AgentViewModel(
                 ?.takeIf { it.isNotBlank() } ?: BuildConfig.LLM_LOCAL_ENDPOINT,
             localModel = prefs.getString("agent_local_model", null)
                 ?.takeIf { it.isNotBlank() } ?: BuildConfig.LLM_LOCAL_MODEL,
+            localApiKey = KeyStorage.loadLocal(getApplication()) ?: "",
             localRobust = prefs.getBoolean("agent_local_robust", true),
             temperature = prefs.getFloat("agent_temperature", 0.7f),
             maxTokens = prefs.getString("agent_max_tokens", "0") ?: "0",
@@ -156,8 +158,10 @@ class AgentViewModel(
         ),
         systemPrompt = { _settings.value.systemPrompt },
         apiKey = {
-            // Локальная модель (Ollama/LM Studio) не требует ключа.
-            if (_settings.value.provider == LlmProvider.LOCAL) "" else KeyStorage.load(getApplication())
+            // LOCAL: ключ локального шлюза (если задан) — иначе пустой (напрямую в Ollama без auth).
+            // CLOUD: облачный ключ провайдера из Keystore.
+            if (_settings.value.provider == LlmProvider.LOCAL) _settings.value.localApiKey
+            else KeyStorage.load(getApplication())
         },
         model = {
             if (_settings.value.provider == LlmProvider.LOCAL) _settings.value.localModel
@@ -543,6 +547,10 @@ class AgentViewModel(
     fun updateSettings(transform: (AgentSettings) -> AgentSettings) {
         val new = transform(_settings.value)
         val teamChanged = new.team != _settings.value.team
+        // Ключ локального шлюза — секрет: храним зашифрованным в Keystore, не в общих префсах.
+        if (new.localApiKey != _settings.value.localApiKey) {
+            KeyStorage.saveLocal(getApplication(), new.localApiKey)
+        }
         prefs.edit()
             .putString("system_prompt", new.systemPrompt)
             .putString("agent_provider", new.provider.name)

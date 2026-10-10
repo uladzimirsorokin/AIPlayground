@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Домашний сервер (macOS): автозапуск шлюза через launchd.
+     Установка:
+       cp com.user.llm-gateway.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.llm-gateway.plist
+     Ключ/лимиты задаются в EnvironmentVariables ниже. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.user.llm-gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/uladzimirsarokin/AndroidStudioProjects/AIAdventChallenge/tools/llm_service/gateway.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>UPSTREAM</key><string>http://127.0.0.1:11434</string>
+    <key>GATEWAY_HOST</key><string>0.0.0.0</string>
+    <key>GATEWAY_PORT</key><string>8080</string>
+    <key>GATEWAY_API_KEY</key><string>CHANGE_ME</string>
+    <key>RATE_LIMIT_PER_MIN</key><string>20</string>
+    <key>MAX_CONTEXT_TOKENS</key><string>8192</string>
+    <key>MAX_OUTPUT_TOKENS</key><string>1024</string>
+    <key>DEFAULT_MODEL</key><string>gpt-oss-32k</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/llm-gateway.log</string>
+  <key>StandardErrorPath</key><string>/tmp/llm-gateway.err</string>
+</dict>
+</plist>

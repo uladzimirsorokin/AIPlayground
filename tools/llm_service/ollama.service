@@ -1,0 +1,24 @@
+# Домашний сервер (Linux): systemd-юнит для Ollama, слушающий сеть.
+# Установка:
+#   sudo useradd -r -s /bin/false ollama
+#   sudo cp ollama.service /etc/systemd/system/ollama.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ollama
+[Unit]
+Description=Ollama local LLM service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ollama
+Group=ollama
+ExecStart=/usr/local/bin/ollama serve
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_CONTEXT_LENGTH=8192"
+Environment="OLLAMA_NUM_PARALLEL=2"
+Environment="OLLAMA_KEEP_ALIVE=30m"
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

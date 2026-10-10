@@ -68,6 +68,7 @@ import com.example.aiadventchallenge.data.agent.LongTermEntry
 import com.example.aiadventchallenge.data.agent.TaskStage
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -433,6 +434,22 @@ text = {
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
+                    }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedTextField(
+                                value = settings.localApiKey,
+                                onValueChange = { onChange(settings.copy(localApiKey = it)) },
+                                label = { Text(stringResource(R.string.settings_local_api_key)) },
+                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_local_api_key_desc),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     }
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
