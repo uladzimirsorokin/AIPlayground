@@ -31,6 +31,13 @@ class RagViewModel(
     private val prefs =
         getApplication<Application>().getSharedPreferences("rag", Context.MODE_PRIVATE)
 
+    // День 31: путь к другому проекту задаётся в настройках агента (префсы "settings").
+    private val agentPrefs =
+        getApplication<Application>().getSharedPreferences("settings", Context.MODE_PRIVATE)
+
+    private fun projectRoot(): String =
+        agentPrefs.getString("agent_project_root", "")?.trim() ?: ""
+
     private val _endpoint = MutableStateFlow(
         prefs.getString("endpoint", null) ?: "http://10.0.2.2:8000/mcp"
     )
@@ -116,6 +123,7 @@ class RagViewModel(
                     .put("embedding", "ollama")
                     .put("chunk_size", _chunkSize.value.toIntOrNull() ?: 150)
                     .put("overlap", _overlap.value.toIntOrNull() ?: 30)
+                    .apply { projectRoot().takeIf { it.isNotBlank() }?.let { put("root", it) } }
                     .toString()
                 val raw = ensureMcp().callTool("index_build", args)
                 val j = JSONObject(raw)
@@ -176,6 +184,7 @@ class RagViewModel(
                     .put("query", q)
                     .put("source", _source.value.ifBlank { "all" })
                     .put("strategy", _strategy.value)
+                    .apply { projectRoot().takeIf { it.isNotBlank() }?.let { put("root", it) } }
                     .toString()
                 val raw = ensureMcp().callTool("index_search", args)
                 val j = JSONObject(raw)

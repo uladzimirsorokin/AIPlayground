@@ -67,7 +67,8 @@ data class AgentSettings(
     val ragRerank: Boolean,
     val ragRewrite: Boolean,
     val ragTopK: String,
-    val ragFetchK: String
+    val ragFetchK: String,
+    val projectRoot: String
 )
 
 class AgentViewModel(
@@ -134,7 +135,8 @@ class AgentViewModel(
             ragRerank = prefs.getBoolean("agent_rag_rerank", false),
             ragRewrite = prefs.getBoolean("agent_rag_rewrite", false),
             ragTopK = prefs.getString("agent_rag_top_k", "3") ?: "3",
-            ragFetchK = prefs.getString("agent_rag_fetch_k", "20") ?: "20"
+            ragFetchK = prefs.getString("agent_rag_fetch_k", "20") ?: "20",
+            projectRoot = prefs.getString("agent_project_root", "") ?: ""
         )
     )
     val settings: StateFlow<AgentSettings> = _settings.asStateFlow()
@@ -198,7 +200,8 @@ class AgentViewModel(
         ragRerank = { _settings.value.ragRerank },
         ragRewrite = { _settings.value.ragRewrite },
         ragTopK = { _settings.value.ragTopK.toIntOrNull() ?: 3 },
-        ragFetchK = { _settings.value.ragFetchK.toIntOrNull() ?: 20 }
+        ragFetchK = { _settings.value.ragFetchK.toIntOrNull() ?: 20 },
+        projectRoot = { _settings.value.projectRoot }
     )
 
     /** Список эндпоинтов MCP: настройка "endpoints" (через запятую) в SharedPreferences "mcp",
@@ -579,6 +582,7 @@ class AgentViewModel(
             .putBoolean("agent_rag_rewrite", new.ragRewrite)
             .putString("agent_rag_top_k", new.ragTopK.filter { it.isDigit() }.take(3))
             .putString("agent_rag_fetch_k", new.ragFetchK.filter { it.isDigit() }.take(3))
+            .putString("agent_project_root", new.projectRoot.trim())
             .apply()
         // Список MCP-эндпоинтов хранится в префсах "mcp" (общих с экраном MCP).
         if (new.mcpEndpoints != _settings.value.mcpEndpoints) {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -278,12 +279,25 @@ fun AgentScreen(
                     .padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = stringResource(
-                        if (hasSavedContext) R.string.agent_empty_context else R.string.agent_empty
-                    ),
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (hasSavedContext) R.string.agent_empty_context else R.string.agent_empty
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.agent_empty_hint),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -651,6 +665,22 @@ text = {
                         )
                         Text(
                             text = stringResource(R.string.settings_mcp_endpoints_desc),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedTextField(
+                            value = settings.projectRoot,
+                            onValueChange = { onChange(settings.copy(projectRoot = it)) },
+                            label = { Text(stringResource(R.string.settings_project_root)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_project_root_desc),
                             style = MaterialTheme.typography.bodySmall
                         )
                     }

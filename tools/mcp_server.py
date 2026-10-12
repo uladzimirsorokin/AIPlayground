@@ -47,12 +47,14 @@ SQLite (`tools/mcp_scheduler.db`), поэтому переживают пере�
 """
 
 import functools
+import hashlib
 import json
 import os
 import random
 import re
 import sqlite3
 import ssl
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -600,15 +602,19 @@ def index_build(
     embedding: Annotated[Literal["ollama", "tfidf"], _Field(description="тип эмбеддингов")],
     chunk_size: Annotated[int, _Field(description="ОБЯЗАТЕЛЬНО: размер чанка в токенах, как просил пользователь", ge=1)],
     overlap: Annotated[int, _Field(description="ОБЯЗАТЕЛЬНО: перекрытие чанков в токенах, как просил пользователь", ge=0)],
+    root: Annotated[str, _Field(description="путь к другому проекту (пусто — этот репозиторий); source тогда — подпапка внутри него или 'all'")] = "",
 ) -> str:
     """Построить локальный RAG-индекс для подпапки tools/<source> (или 'all' — весь проект).
     ВЫЗЫВАЙ ЭТОТ ИНСТРУМЕНТ, когда пользователь просит «проиндексировать/построить модель/индекс
     по папке». source — папка из запроса (например 'docs/DnD'), strategy — fixed|structure,
     chunk_size/overlap — размер и перекрытие из запроса. Эмбеддинги: ollama (nomic-embed-text) | tfidf.
-    Индекс сохраняется в tools/index/index_<source>_<strategy>_<embedding>.json."""
+    При заданном root индексируется другой проект (source — подпапка внутри него или 'all');
+    индекс сохраняется отдельно по проекту, чтобы не смешивать."""
     params = {"size": max(1, chunk_size), "overlap": max(0, overlap), "max_section": 400}
+    project = _project_key(root) if root.strip() else ""
     try:
-        idx = _di.build_index(strategy, params, source, embedding)
+        docs = _di.collect_documents(source, root=root or None)
+        idx = _di.build_index(strategy, params, source, embedding, docs=docs, project=project)
     except Exception as exc:
         _log(f"[rag] index_build failed: {exc}")
         return json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False)
@@ -617,6 +623,8 @@ def index_build(
         {
             "ok": True,
             "path": path,
+            "project": idx.get("project", ""),
+            "root": os.path.abspath(os.path.expanduser(root)) if root.strip() else "",
             "source": idx["source"],
             "strategy": idx["strategy"],
             "embedding": idx["embedding_model"],
@@ -631,28 +639,38 @@ def index_build(
 
 @_tool()
 def index_status() -> str:
-    """Список построенных RAG-индексов в tools/index/ с метаданными (source, strategy, модель, число чанков)."""
+    """Список построенных RAG-индексов (включая индексы других проектов) с метаданными."""
     items = []
-    if os.path.isdir(_di.INDEX_DIR):
-        for fname in sorted(os.listdir(_di.INDEX_DIR)):
-            if not fname.endswith(".json"):
-                continue
-            try:
-                with open(os.path.join(_di.INDEX_DIR, fname), encoding="utf-8") as f:
-                    idx = json.load(f)
-                items.append(
-                    {
-                        "file": fname,
-                        "source": idx.get("source"),
-                        "strategy": idx.get("strategy"),
-                        "embedding": idx.get("embedding_model"),
-                        "chunks": len(idx.get("chunks", [])),
-                        "documents": idx.get("corpus", {}).get("documents"),
-                        "built_at": idx.get("built_at"),
-                    }
-                )
-            except Exception:
-                continue
+
+    def _add(path: str, label: str) -> None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                idx = json.load(f)
+        except Exception:
+            return
+        items.append(
+            {
+                "file": label,
+                "project": idx.get("project", ""),
+                "source": idx.get("source"),
+                "strategy": idx.get("strategy"),
+                "embedding": idx.get("embedding_model"),
+                "chunks": len(idx.get("chunks", [])),
+                "documents": idx.get("corpus", {}).get("documents"),
+                "built_at": idx.get("built_at"),
+            }
+        )
+
+    base = _di.INDEX_DIR
+    if os.path.isdir(base):
+        for name in sorted(os.listdir(base)):
+            p = os.path.join(base, name)
+            if name.startswith("index_") and name.endswith(".json"):
+                _add(p, name)
+            elif os.path.isdir(p):
+                for f in sorted(os.listdir(p)):
+                    if f.endswith(".json"):
+                        _add(os.path.join(p, f), f"{name}/{f}")
     return json.dumps(items, ensure_ascii=False)
 
 
@@ -665,24 +683,116 @@ def index_search(
     fetch_k: Annotated[int, _Field(description="сколько кандидатов брать ДО фильтрации/реранка (0 = без ограничения)", ge=0)] = 0,
     min_score: Annotated[float, _Field(description="порог отсечения нерелевантных по similarity (0 = без порога)")] = 0.0,
     rerank: Annotated[bool, _Field(description="включить эвристический реранкер (эмбеддинг + лексическое пересечение)")] = False,
+    root: Annotated[str, _Field(description="путь к другому проекту (тот же, что в index_build); пусто — этот репозиторий")] = "",
 ) -> str:
     """Поиск по построенному RAG-индексу (День 23: фильтр по порогу + реранк).
     Двухэтапно: retrieve топ-fetch_k кандидатов → отсечь по min_score → (опц.) rerank → top_k.
     strategy ДОЛЖНА совпадать со стратегией, которой индекс был построен.
     Возвращает топ чанков: score, source, section, snippet (и emb_score/lexical_overlap при rerank)."""
-    path = _di.index_path(source, strategy, "ollama")
+    project = _project_key(root) if root.strip() else ""
+    path = _di.index_path(source, strategy, "ollama", project)
     if not os.path.exists(path):
         return json.dumps(
             {"ok": False, "reason": f"индекс не найден: {path}. Сначала вызовите index_build с той же strategy."},
             ensure_ascii=False,
         )
-    idx = _di.load_index(source, strategy, "ollama")
+    idx = _di.load_index(source, strategy, "ollama", project)
     results = [meta for _, meta in _di.search(
         idx, query, max(1, top_k),
         fetch_k=max(0, fetch_k), min_score=max(0.0, min_score), rerank=bool(rerank),
     )]
     return json.dumps(
         {"ok": True, "query": query, "top_k": len(results), "results": results},
+        ensure_ascii=False,
+    )
+
+
+# --- День 31 (ассистент разработчика): контекст проекта через git -----------
+# Модель/агент получает сведения о репозитории через MCP: минимум — текущая ветка,
+# дополнительно — статус, список файлов и diff. Команды выполняются в корне проекта
+# (PROJECT_ROOT — по умолчанию этот репозиторий; можно указать другой проект через env).
+# Для индексации чужого проекта используйте IDX_ROOT (+ отдельный IDX_DIR).
+
+PROJECT_ROOT = os.environ.get("PROJECT_ROOT", _di.ROOT)
+
+
+def _project_key(root: str) -> str:
+    """Ключ проекта по пути: <basename>-<hash6>. Индексы разных проектов не смешиваются."""
+    root = os.path.abspath(os.path.expanduser(root))
+    base = re.sub(r"[^a-zA-Z0-9_.-]", "_", os.path.basename(root)) or "project"
+    return f"{base}-{hashlib.sha1(root.encode('utf-8')).hexdigest()[:6]}"
+
+
+def _git(args: list, timeout: int = 10, root: str = "") -> tuple:
+    """Запускает git в корне проекта (root, иначе PROJECT_ROOT). Возвращает (ok, text)."""
+    cwd = root.strip() or PROJECT_ROOT
+    try:
+        proc = subprocess.run(
+            ["git", "-C", cwd, *args],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except FileNotFoundError:
+        return False, "git не установлен"
+    except subprocess.TimeoutExpired:
+        return False, f"git {' '.join(args)}: таймаут"
+    except Exception as exc:  # noqa: BLE001 — сервер не должен падать из-за git
+        return False, str(exc)
+    out = (proc.stdout or proc.stderr or "").strip()
+    if proc.returncode != 0:
+        return False, out or f"git {' '.join(args)}: код {proc.returncode}"
+    return True, out
+
+
+@_tool()
+def git_branch(root: str = "") -> str:
+    """Текущая git-ветка проекта. root — путь к другому проекту (пусто = корень по умолчанию)."""
+    ok, out = _git(["rev-parse", "--abbrev-ref", "HEAD"], root=root)
+    return json.dumps(
+        {"ok": ok, "branch": out if ok else "", "error": None if ok else out},
+        ensure_ascii=False,
+    )
+
+
+@_tool()
+def git_status(root: str = "") -> str:
+    """Краткий git status проекта (ветка + изменённые/новые файлы). root — путь к другому проекту."""
+    ok, out = _git(["status", "--porcelain=v1", "-b"], root=root)
+    return json.dumps(
+        {"ok": ok, "status": out if ok else "", "error": None if ok else out},
+        ensure_ascii=False,
+    )
+
+
+@_tool()
+def git_list_files(path: str = "", limit: int = 200, root: str = "") -> str:
+    """Список отслеживаемых git-файлов проекта (можно ограничить подпапкой path). root — другой проект."""
+    args = ["ls-files"]
+    if path.strip():
+        args += ["--", path.strip()]
+    ok, out = _git(args, root=root)
+    if not ok:
+        return json.dumps({"ok": False, "reason": out}, ensure_ascii=False)
+    files = [line for line in out.splitlines() if line.strip()]
+    limited = files[: max(1, limit)]
+    return json.dumps(
+        {"ok": True, "count": len(files), "files": limited, "truncated": len(files) > len(limited)},
+        ensure_ascii=False,
+    )
+
+
+@_tool()
+def git_diff(staged: bool = False, path: str = "", root: str = "") -> str:
+    """Diff рабочего дерева (или проиндексированных изменений при staged=true). root — другой проект."""
+    args = ["diff"]
+    if staged:
+        args.append("--staged")
+    if path.strip():
+        args += ["--", path.strip()]
+    ok, out = _git(args, root=root)
+    if not ok:
+        return json.dumps({"ok": False, "reason": out}, ensure_ascii=False)
+    return json.dumps(
+        {"ok": True, "diff": out[:8000], "truncated": len(out) > 8000},
         ensure_ascii=False,
     )
 

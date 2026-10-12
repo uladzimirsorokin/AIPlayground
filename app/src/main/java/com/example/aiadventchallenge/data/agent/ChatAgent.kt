@@ -65,6 +65,8 @@ class ChatAgent(
     private val ragRewrite: () -> Boolean,
     private val ragTopK: () -> Int,
     private val ragFetchK: () -> Int,
+    /** День 31: путь к другому проекту для git- и RAG-инструментов (пусто — корень сервера). */
+    private val projectRoot: () -> String,
     val contextLimit: Int = BuildConfig.LLM_CONTEXT_LIMIT
 ) : Agent {
 
@@ -398,6 +400,18 @@ class ChatAgent(
         }
         if (command.startsWith("ragtest", ignoreCase = true)) {
             return handleRagTest(command.removePrefix("ragtest").removePrefix(":").trim())
+        }
+        // День 31: ассистент разработчика — /help <вопрос> о проекте (RAG по документации + git).
+        if (command.equals("help", ignoreCase = true) ||
+            command.equals("/help", ignoreCase = true) ||
+            command.startsWith("/help ", ignoreCase = true)
+        ) {
+            val q = if (command.startsWith("/help", ignoreCase = true)) {
+                command.substring(5).trim()
+            } else {
+                ""
+            }
+            return handleHelpCommand(q)
         }
 
         val key = apiKey() ?: throw IllegalStateException("API key is not set")
@@ -766,6 +780,118 @@ class ChatAgent(
         )
     }
 
+    /** Команда /help (День 31): ассистент разработчика — отвечает о проекте, опираясь на
+     *  RAG-документацию (README + docs) и контекст репозитория (git-ветка через MCP). */
+    private suspend fun handleHelpCommand(question: String): AgentResponse {
+        val q = question.ifBlank { "Как устроен проект? Кратко опиши назначение и основные модули." }
+        val key = apiKey() ?: throw IllegalStateException("API key is not set")
+        _history.add(ChatMessage("user", "/help $q".trim()))
+
+        val gitContext = fetchGitContext()
+        val outcome = buildRagOutcome(q, force = true, sourceOverride = "all")
+        val context = buildString {
+            if (gitContext != null) {
+                append("Контекст репозитория (git):\n").append(gitContext).append("\n\n")
+            } else {
+                append("Контекст репозитория (git): недоступен (нет MCP git-инструментов).\n\n")
+            }
+            append(outcome?.context ?: "Документация RAG недоступна (постройте индекс на экране RAG).")
+        }
+
+        val helpSystem =
+            "Ты — ассистент разработчика проекта AIAdventChallenge (Android: Kotlin + Jetpack Compose, " +
+                "локальные MCP-серверы на Python, RAG). Отвечай на вопросы о структуре проекта, " +
+                "документации, архитектуре, настройках и API, опираясь ТОЛЬКО на приведённый контекст " +
+                "(документация из RAG + сведения о репозитории). Если данных в контексте нет — честно " +
+                "скажи об этом и предложи, что уточнить; не выдумывай детали."
+
+        val messages = listOf(
+            ChatMessage("system", helpSystem),
+            ChatMessage("system", context),
+            ChatMessage("user", q)
+        )
+        val result = try {
+            // /help отвечает обычным RAG-ответом без обязательных дословных цитат:
+            // проект-обзорный вопрос, строгая цитатная валидация тут слишком хрупкая.
+            runRagAnswer(messages, key, context, requireQuotes = false)
+        } catch (e: Exception) {
+            _history.removeAt(_history.size - 1)
+            throw e
+        }
+        _history.add(ChatMessage("assistant", result.content))
+        shortTermStore.save(_history)
+
+        stats = AgentStats(
+            requests = stats.requests + 1,
+            inputTokens = stats.inputTokens + result.promptTokens,
+            outputTokens = stats.outputTokens + result.completionTokens,
+            totalTokens = stats.totalTokens + result.totalTokens,
+            costUsd = stats.costUsd + result.costUsd,
+            compactions = compactCount,
+            savedTokens = savedTokens
+        )
+        Log.d(
+            "AGENT",
+            "help: q=\"${q.take(80)}\" git=${gitContext != null} ragPassed=${outcome?.passed} " +
+                "model=${result.model} in=${result.promptTokens} out=${result.completionTokens}"
+        )
+        return AgentResponse(
+            reply = result.content,
+            promptTokens = result.promptTokens,
+            completionTokens = result.completionTokens,
+            totalTokens = result.totalTokens,
+            costUsd = result.costUsd,
+            stats = stats,
+            model = result.model
+        )
+    }
+
+    /** День 31: контекст репозитория через MCP — git-ветка (обязательно) и, если сервер отдаёт,
+     *  краткий статус и список отслеживаемых файлов. null, если git-инструменты недоступны. */
+    private suspend fun fetchGitContext(): String? {
+        val endpoints = mcpEndpointsList()
+        if (endpoints.isEmpty()) return null
+        for (ep in endpoints) {
+            try {
+                val mcp = McpClient(ep)
+                val names = mcp.connectAndListTools().tools.map { it.name }.toSet()
+                if ("git_branch" !in names) continue
+                val sb = StringBuilder()
+                runCatching {
+                    val j = JSONObject(mcp.callTool("git_branch", withRoot("{}")))
+                    if (j.optBoolean("ok", false)) {
+                        sb.append("Текущая git-ветка: ").append(j.optString("branch", "?")).append("\n")
+                    }
+                }
+                if ("git_status" in names) {
+                    runCatching {
+                        val j = JSONObject(mcp.callTool("git_status", withRoot("{}")))
+                        val st = j.optString("status", "").trim()
+                        if (j.optBoolean("ok", false) && st.isNotBlank()) {
+                            sb.append("git status:\n").append(st.take(800)).append("\n")
+                        }
+                    }
+                }
+                if ("git_list_files" in names) {
+                    runCatching {
+                        val j = JSONObject(mcp.callTool("git_list_files", withRoot(JSONObject().put("limit", 40).toString())))
+                        val arr = j.optJSONArray("files")
+                        if (j.optBoolean("ok", false) && arr != null && arr.length() > 0) {
+                            sb.append("Отслеживаемые файлы (первые ").append(arr.length()).append("):\n")
+                            for (i in 0 until arr.length()) {
+                                sb.append("- ").append(arr.optString(i)).append("\n")
+                            }
+                        }
+                    }
+                }
+                if (sb.isNotBlank()) return sb.toString().trimEnd()
+            } catch (e: Exception) {
+                Log.d("AGENT", "help: git context [$ep] failed: ${e.message}")
+            }
+        }
+        return null
+    }
+
     /** Один вызов модели (с опциональными инструментами). */
     private suspend fun callModel(
         messages: List<ChatMessage>,
@@ -851,10 +977,11 @@ class ChatAgent(
             for (tc in result.toolCalls) {
                 val mcp = clientOf[tc.name]
                 // День 23: index_search в RAG-режиме выполняется с настройками агента, не модели.
-                val callArgs = if (tc.name == "index_search" && ragEnabled()) {
-                    forcedRagSearchArgs(tc.arguments)
-                } else {
-                    tc.arguments
+                // День 31: в git-/index-инструменты добавляется root (путь к другому проекту).
+                val callArgs = when {
+                    tc.name == "index_search" && ragEnabled() -> withRoot(forcedRagSearchArgs(tc.arguments))
+                    tc.name.startsWith("git_") || tc.name.startsWith("index_") -> withRoot(tc.arguments)
+                    else -> tc.arguments
                 }
                 val toolResult = if (mcp != null) {
                     mcp.callTool(tc.name, callArgs)
@@ -942,6 +1069,15 @@ class ChatAgent(
         return a.toString()
     }
 
+    /** День 31: добавляет root (путь к другому проекту из настроек) в аргументы git-/index-инструментов. */
+    private fun withRoot(argsJson: String): String {
+        val root = projectRoot().trim()
+        if (root.isBlank()) return argsJson
+        return runCatching {
+            JSONObject(argsJson).put("root", root).toString()
+        }.getOrDefault(argsJson)
+    }
+
     /** Результат RAG-поиска: контекст для LLM и прошёл ли хоть один чанк порог релевантности. */
     private data class RagOutcome(val context: String?, val passed: Boolean)
 
@@ -964,8 +1100,19 @@ class ChatAgent(
             "- Если в контексте нет ответа на вопрос — верни " +
             "{\"answer\": \"Не знаю\", \"sources\": [], \"quotes\": []}."
 
-    private fun ragNorm(s: String): String =
-        s.lowercase().replace(Regex("\\s+"), " ").trim()
+    /** Нормализация для сравнения цитат: регистр, тире/кавычки, markdown-разметка, пробелы. */
+    private fun ragNorm(s: String): String {
+        var x = s.lowercase()
+        for ((a, b) in listOf(
+            "\u2013" to "-", "\u2014" to "-", "\u2011" to "-", "\u2212" to "-",      // – — ‑ −
+            "\u00ab" to "\"", "\u00bb" to "\"", "\u201c" to "\"", "\u201d" to "\"",   // « » “ ”
+            "\u2018" to "'", "\u2019" to "'"                                          // ‘ ’
+        )) {
+            x = x.replace(a, b)
+        }
+        x = x.replace(Regex("[*_`#>]"), " ")
+        return x.replace(Regex("\\s+"), " ").trim()
+    }
 
     private fun parseRagAnswer(raw: String): RagAnswer? {
         val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
@@ -999,11 +1146,13 @@ class ChatAgent(
         }.getOrNull()
     }
 
-    /** Валидация: answer непустой; для не-«не знаю» — есть источники и цитаты, и цитаты дословно из контекста. */
-    private fun ragAnswerValid(a: RagAnswer?, context: String): Boolean {
+    /** Валидация: answer непустой; для не-«не знаю» — есть источники, и (если requireQuotes) цитаты дословно из контекста. */
+    private fun ragAnswerValid(a: RagAnswer?, context: String, requireQuotes: Boolean = true): Boolean {
         if (a == null || a.answer.isBlank()) return false
         if (a.answer.contains("не знаю", ignoreCase = true)) return true
-        if (a.sources.isEmpty() || a.quotes.isEmpty()) return false
+        if (a.sources.isEmpty()) return false
+        if (!requireQuotes) return true
+        if (a.quotes.isEmpty()) return false
         val ctx = ragNorm(context)
         return a.quotes.all { it.text.isNotBlank() && ctx.contains(ragNorm(it.text)) }
     }
@@ -1024,16 +1173,21 @@ class ChatAgent(
         }
     }.trim()
 
-    /** RAG-ответ в JSON с валидацией (структура + цитаты + LLM-faithfulness) и одним повтором (День 24). */
+    /** RAG-ответ в JSON с валидацией (структура + цитаты + LLM-faithfulness) и одним повтором (День 24).
+     *  requireQuotes=false (например, для /help): цитаты и faithfulness не проверяются — достаточно
+     *  непустого ответа и источников (более устойчиво к перефразированию локальной моделью). */
     private suspend fun runRagAnswer(
         messages: List<ChatMessage>,
         key: String,
-        context: String
+        context: String,
+        requireQuotes: Boolean = true
     ): CompletionResult {
         val msgs = messages + ChatMessage("system", ragJsonInstruction)
         var result = callModel(msgs, key, true, null)
         var parsed = parseRagAnswer(result.content)
-        if (ragAnswerValid(parsed, context) && isFaithful(key, context, parsed!!)) {
+        if (parsed != null && ragAnswerValid(parsed, context, requireQuotes) &&
+            (!requireQuotes || isFaithful(key, context, parsed))
+        ) {
             return result.copy(content = renderRagAnswer(parsed))
         }
 
@@ -1054,7 +1208,9 @@ class ChatAgent(
             costUsd = result.costUsd + r2.costUsd,
             model = r2.model ?: result.model
         )
-        if (p2 != null && ragAnswerValid(p2, context) && isFaithful(key, context, p2)) {
+        if (p2 != null && ragAnswerValid(p2, context, requireQuotes) &&
+            (!requireQuotes || isFaithful(key, context, p2))
+        ) {
             return total.copy(content = renderRagAnswer(p2))
         }
         // Дважды не прошло — не рискуем галлюцинацией, отвечаем «Не знаю».
@@ -1095,10 +1251,15 @@ class ChatAgent(
     }
 
     /** RAG (День 22–24): вопрос → (опц.) rewrite → поиск чанков (filter/rerank) → контекст.
-     *  Возвращает null при выключенном RAG или ошибке MCP; passed=false, если ничего не прошло порог. */
-    private suspend fun buildRagOutcome(userMessage: String, force: Boolean = false): RagOutcome? {
+     *  Возвращает null при выключенном RAG или ошибке MCP; passed=false, если ничего не прошло порог.
+     *  sourceOverride позволяет /help (День 31) искать по документации проекта, игнорируя настройку. */
+    private suspend fun buildRagOutcome(
+        userMessage: String,
+        force: Boolean = false,
+        sourceOverride: String? = null
+    ): RagOutcome? {
         if (!force && !ragEnabled()) return null
-        val source = ragSource().trim().ifBlank { "all" }
+        val source = (sourceOverride ?: ragSource()).trim().ifBlank { "all" }
         val strategy = ragStrategy().trim().ifBlank { "structure" }
         val minScore = ragMinScore()
         val rerank = ragRerank()
@@ -1143,6 +1304,7 @@ class ChatAgent(
                 .put("fetch_k", ragFetchK().coerceAtLeast(0))
                 .put("min_score", minScore)
                 .put("rerank", rerank)
+                .apply { projectRoot().trim().takeIf { it.isNotBlank() }?.let { put("root", it) } }
                 .toString()
             val raw = mcp.callTool("index_search", args)
             val j = JSONObject(raw)

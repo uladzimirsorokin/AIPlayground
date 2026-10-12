@@ -27,7 +27,7 @@ from collections import Counter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS = os.path.dirname(os.path.abspath(__file__))
-INDEX_DIR = os.path.join(TOOLS, "index")
+INDEX_DIR = os.environ.get("IDX_DIR", os.path.join(TOOLS, "index"))
 
 TOKEN_RE = re.compile(r"[a-zа-яё0-9_]+")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
@@ -50,9 +50,70 @@ def _out(msg: str) -> None:
     print(msg, flush=True)
 
 
-def collect_documents(source: str = "all") -> list:
+# Универсальный обход произвольного проекта (День 31+): используется, когда задан
+# IDX_ROOT — тогда индексируется любой проект, а не только этот репозиторий.
+TEXT_EXTS = {
+    ".md", ".mdx", ".txt", ".rst", ".adoc",
+    ".kt", ".kts", ".java", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cs", ".rb", ".php", ".swift", ".scala",
+    ".sql", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".gradle",
+    ".xml", ".html", ".css", ".scss", ".sh", ".bash", ".zsh", ".proto", ".tf",
+}
+SKIP_DIRS = {
+    ".git", ".hg", ".svn", "node_modules", "build", ".gradle", ".idea", ".vscode",
+    "venv", ".venv", "__pycache__", "dist", "out", ".kotlin", ".next", "target",
+    ".dart_tool", "Pods", ".terraform", "coverage", ".pytest_cache", ".mypy_cache",
+}
+_MAX_FILE_BYTES = 300_000
+_MAX_FILES = 3000
+_MAX_TOTAL_CHARS = 6_000_000
+
+
+def collect_tree(root: str) -> list:
+    """Обходит произвольный проект и возвращает [(rel_path, abs_path, text)] по текстовым файлам."""
+    root = os.path.abspath(os.path.expanduser(root))
+    if not os.path.isdir(root):
+        raise ValueError(f"не директория: {root}")
+    docs, total = [], 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        for fn in sorted(filenames):
+            if os.path.splitext(fn)[1].lower() not in TEXT_EXTS:
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                if os.path.getsize(p) > _MAX_FILE_BYTES:
+                    continue
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            if not text.strip():
+                continue
+            docs.append((os.path.relpath(p, root), p, text))
+            total += len(text)
+            if len(docs) >= _MAX_FILES or total >= _MAX_TOTAL_CHARS:
+                return docs
+    return docs
+
+
+def collect_documents(source: str = "all", root: str = None) -> list:
     """Возвращает [(title, source, text)].
-    source == "all" — весь проект (README/статьи/код); иначе подпапка tools/<source>."""
+    Если задан root (или IDX_ROOT) — индексируется произвольный проект (обход дерева):
+    source == "all" — весь проект, иначе — подпапка внутри него. Иначе — этот репозиторий
+    (source == "all") или подпапка tools/<source>."""
+    override = (root or os.environ.get("IDX_ROOT", "")).strip()
+    if override:
+        base = os.path.abspath(os.path.expanduser(override))
+        if source in ("", "all"):
+            sub = base
+        else:
+            sub = os.path.abspath(os.path.join(base, source))
+            if sub != base and not sub.startswith(base + os.sep):
+                _out(f"Ошибка: путь '{source}' вне проекта {base}")
+                return []
+        return collect_tree(sub)
+
     docs = []
     paths = []
 
@@ -60,6 +121,8 @@ def collect_documents(source: str = "all") -> list:
         md = [os.path.join(ROOT, "README.md"), os.path.join(ROOT, "AGENTS.md")]
         md += sorted(glob.glob(os.path.join(TOOLS, "docs", "*.md")))
         md += sorted(glob.glob(os.path.join(TOOLS, "docs", "*.txt")))
+        # День 31: документация проекта (README + docs/) — корпус для ассистента разработчика.
+        md += sorted(glob.glob(os.path.join(ROOT, "docs", "**", "*.md"), recursive=True))
         paths += md
         # Исходники проекта (без build/).
         for pattern in (
@@ -212,9 +275,13 @@ def ollama_embed(texts: list, batch: int = 32) -> list:
     return vectors
 
 
-def build_index(strategy: str, params: dict, source: str = "all", embedding: str = "ollama") -> dict:
-    """Строит индекс: чанки + эмбеддинги (ollama — плотные векторы, tfidf — разреженные)."""
-    docs = collect_documents(source)
+def build_index(strategy: str, params: dict, source: str = "all", embedding: str = "ollama", docs: list = None, project: str = "") -> dict:
+    """Строит индекс: чанки + эмбеддинги (ollama — плотные векторы, tfidf — разреженные).
+    docs — готовый список [(title, source, text)]; если None, корпус собирается из source
+    (для индексации произвольного проекта агент-сервер передаёт docs явно, День 31+).
+    project — ключ проекта: индексы разных проектов хранятся в отдельных подпапках."""
+    if docs is None:
+        docs = collect_documents(source)
     chunks = build_chunks(docs, strategy, params)
 
     if embedding == "ollama":
@@ -249,6 +316,7 @@ def build_index(strategy: str, params: dict, source: str = "all", embedding: str
         "embedding_model": model,
         "embedding_dim": dim,
         "source": source,
+        "project": project,
         "params": params,
         "built_at": datetime_now(),
         "corpus": {
@@ -269,21 +337,26 @@ def datetime_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def index_path(source: str, strategy: str, embedding: str) -> str:
+def index_path(source: str, strategy: str, embedding: str, project: str = "") -> str:
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", source)
-    return os.path.join(INDEX_DIR, f"index_{safe}_{strategy}_{embedding}.json")
+    fname = f"index_{safe}_{strategy}_{embedding}.json"
+    if project:
+        safe_proj = re.sub(r"[^a-zA-Z0-9_.-]", "_", project)
+        return os.path.join(INDEX_DIR, safe_proj, fname)
+    return os.path.join(INDEX_DIR, fname)
 
 
 def save_index(index: dict) -> str:
-    os.makedirs(INDEX_DIR, exist_ok=True)
-    path = index_path(index["source"], index["strategy"], index["embedding"])
+    project = index.get("project", "") or ""
+    path = index_path(index["source"], index["strategy"], index["embedding"], project)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=1)
     return path
 
 
-def load_index(source: str = "all", strategy: str = "structure", embedding: str = "ollama") -> dict:
-    path = index_path(source, strategy, embedding)
+def load_index(source: str = "all", strategy: str = "structure", embedding: str = "ollama", project: str = "") -> dict:
+    path = index_path(source, strategy, embedding, project)
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
