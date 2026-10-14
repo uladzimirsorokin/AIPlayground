@@ -1,0 +1,73 @@
+{
+  "users": [
+    {
+      "id": "u1",
+      "name": "Алиса",
+      "email": "alice@example.com",
+      "plan": "pro",
+      "locale": "ru",
+      "since": "2024-03-01",
+      "device": "Pixel 7, Android 14",
+      "app_version": "3.4.1"
+    },
+    {
+      "id": "u2",
+      "name": "Боб",
+      "email": "bob@example.com",
+      "plan": "free",
+      "locale": "ru",
+      "since": "2026-09-10",
+      "device": "iPhone 13, iOS 17",
+      "app_version": "3.4.0"
+    }
+  ],
+  "tickets": [
+    {
+      "id": "T-1001",
+      "user_id": "u1",
+      "status": "open",
+      "priority": "high",
+      "channel": "email",
+      "product": "mobile",
+      "app_version": "3.4.1",
+      "created_at": "2026-10-12T09:00:00Z",
+      "subject": "Не работает авторизация после обновления",
+      "tags": ["auth", "login", "update"],
+      "messages": [
+        {"role": "user", "text": "После обновления до 3.4.1 не могу войти. Пишет «неверный пароль», хотя пароль точно верный. Пробовала переустановить — не помогло."},
+        {"role": "agent", "text": "Проверяю ваш аккаунт. Уточните, вход по email или через Google?"},
+        {"role": "user", "text": "По email, и раньше всё работало."}
+      ]
+    },
+    {
+      "id": "T-1002",
+      "user_id": "u2",
+      "status": "open",
+      "priority": "normal",
+      "channel": "chat",
+      "product": "mobile",
+      "app_version": "3.4.0",
+      "created_at": "2026-10-12T14:30:00Z",
+      "subject": "Как экспортировать данные",
+      "tags": ["export", "data"],
+      "messages": [
+        {"role": "user", "text": "Хочу выгрузить все свои данные в файл. Как это сделать?"}
+      ]
+    },
+    {
+      "id": "T-1003",
+      "user_id": "u1",
+      "status": "closed",
+      "priority": "low",
+      "channel": "email",
+      "product": "web",
+      "app_version": "3.4.0",
+      "created_at": "2026-09-20T10:00:00Z",
+      "subject": "Вопрос про тариф Pro",
+      "tags": ["billing"],
+      "messages": [
+        {"role": "user", "text": "Чем Pro отличается от Free?"}
+      ]
+    }
+  ]
+}
