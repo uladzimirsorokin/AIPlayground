@@ -71,7 +71,7 @@ class ChatAgent(
 ) : Agent {
 
     private companion object {
-        const val MAX_TOOL_ROUNDS = 10
+        const val MAX_TOOL_ROUNDS = 20
         const val FORMAT_DESCRIPTION =
             "Отвечай строго в JSON без markdown и пояснений."
         const val SUMMARY_PROMPT =
